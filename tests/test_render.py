@@ -26,7 +26,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(render({"agents": agents}).size, (1920, 480))
 
     def test_cached_is_never_added_to_total_by_renderer(self):
-        self.assertEqual(number(None), "—")
+        self.assertEqual(number(None), "0")
         self.assertEqual(number(1000), "1.0K")
         self.assertEqual(number(1234567), "1.23M")
         self.assertEqual(number(100_000_000), "100.00M")
