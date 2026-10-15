@@ -85,6 +85,48 @@ jobs:
             throw "PyInstaller did not create $exe"
           }
 
+      - name: Packaged executable smoke test
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:GITHUB_WORKSPACE "dist\KV-Agent-Desk.exe"
+          $stateName = "kv-agent-dashboard-packaged-smoke-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
+          $state = Join-Path $env:RUNNER_TEMP $stateName
+          New-Item -ItemType Directory -Path $state -Force | Out-Null
+          $arguments = @(
+            "--demo",
+            "--preview-only",
+            "--once",
+            "--no-browser",
+            "--state-dir",
+            ('"{0}"' -f $state)
+          )
+          $process = Start-Process -FilePath $exe -ArgumentList $arguments `
+            -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -PassThru
+          try {
+            if (-not $process.WaitForExit(60000)) {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              throw "Packaged executable smoke test exceeded 60 seconds"
+            }
+            $process.Refresh()
+            if ($process.ExitCode -ne 0) {
+              throw "Packaged executable smoke test exited with code $($process.ExitCode)"
+            }
+          } finally {
+            $process.Dispose()
+          }
+          $frame = Join-Path $state "frame.png"
+          $stateJson = Join-Path $state "state.json"
+          if (-not (Test-Path -LiteralPath $frame -PathType Leaf)) {
+            throw "Packaged executable smoke test did not create frame.png"
+          }
+          if (-not (Test-Path -LiteralPath $stateJson -PathType Leaf)) {
+            throw "Packaged executable smoke test did not create state.json"
+          }
+          $snapshot = Get-Content -LiteralPath $stateJson -Raw | ConvertFrom-Json
+          if ($snapshot.demo -ne $true) {
+            throw "Packaged executable smoke test state.json is not marked demo=true"
+          }
+
       - name: Package portable ZIP
         shell: pwsh
         run: |

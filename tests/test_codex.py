@@ -321,7 +321,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertTrue(subscription["five_hour"]["known"])
         self.assertFalse(subscription["five_hour"].get("unlimited", False))
         self.assertEqual(subscription["weekly"]["remaining_percent"], 75.0)
-        self.assertEqual(subscription["weekly"]["reset_at"], (self.now + timedelta(days=4)).isoformat())
+        self.assertEqual(datetime.fromisoformat(subscription["weekly"]["reset_at"]), self.now + timedelta(days=4))
         self.assertTrue(subscription["weekly"]["known"])
 
 

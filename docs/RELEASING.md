@@ -1,6 +1,6 @@
 # Windows release builds
 
-The `Windows release` workflow builds on a clean GitHub-hosted Windows runner with Python 3.12. It installs the pinned `requirements-build.lock.txt`, runs the unit suite, then performs a `--demo --preview-only --once` smoke run using a directory under `RUNNER_TEMP`. The smoke run does not scan an agent profile or access the LCD.
+The `Windows release` workflow builds on a clean GitHub-hosted Windows runner with Python 3.12. It installs the pinned `requirements-build.lock.txt`, runs the unit suite, and performs both source and packaged-executable smoke tests with `--demo --preview-only --once`. Each uses an isolated directory under `RUNNER_TEMP`; the packaged executable test runs hidden with a 60-second limit, then verifies exit code 0, `frame.png`, and `state.json` with `demo: true`. These checks do not scan agent profiles or access the LCD.
 
 The portable ZIP is the recommended download. To publish a release, push a version tag such as `v0.3.0`. The workflow builds `KV-Agent-Desk.exe`, creates `KV-Agent-Desk-windows-x64.zip` with the executable, public notices, CPython license, and text license files exposed by the locked installed distributions, then creates a SHA-256 sidecar for both outputs. The GitHub Release contains the EXE, ZIP, and both checksums. Use **Actions → Windows release → Run workflow** to build without publishing; its artifact is retained for 30 days.
 
