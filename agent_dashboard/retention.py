@@ -19,6 +19,22 @@ def timestamp(value: str | None) -> datetime | None:
         return None
 
 
+def _quota_window_identity(item: dict) -> tuple[str, object] | None:
+    """Prefer an explicit window, then preserve legacy model/label matching."""
+    window = item.get("window")
+    if isinstance(window, str) and window.strip():
+        return ("window", window.strip())
+    for kind in ("model", "label"):
+        value = item.get(kind)
+        if value:
+            try:
+                hash(value)
+            except TypeError:
+                continue
+            return (kind, value)
+    return None
+
+
 class LastGoodStore:
     def __init__(self, path: Path | None = None, stale_seconds: float = 300):
         self.path = path
@@ -117,11 +133,17 @@ class LastGoodStore:
             subscription["quota_windows"] = deepcopy(old_windows)
             retained.append("subscription.quota_windows")
         elif isinstance(windows, list):
-            prior = {(item.get("model") or item.get("label")): item for item in old_windows if isinstance(item, dict)}
+            prior = {}
+            for item in old_windows:
+                if isinstance(item, dict):
+                    identity = _quota_window_identity(item)
+                    if identity is not None:
+                        prior[identity] = item
             for index, item in enumerate(windows):
                 if not isinstance(item, dict):
                     continue
-                old = prior.get(item.get("model") or item.get("label"))
+                identity = _quota_window_identity(item)
+                old = prior.get(identity) if identity is not None else None
                 if not item.get("known") and old and old.get("known"):
                     windows[index] = deepcopy(old)
                     retained.append("subscription.quota_windows")

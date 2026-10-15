@@ -47,7 +47,7 @@ _DEFAULT_GEOMETRY = {
 _DEFAULT_RADIUS = {"classic": 18, "aurora": 24, "paper": 10}
 _LOGO_FILES = {"chatgpt": "chatgpt.png", "glm": "glm.png", "google": "google.png", "deepseek": "deepseek.png"}
 _PROVIDER_LOGOS = {"codex": "chatgpt", "zcode": "glm", "antigravity": "google"}
-_PROVIDER_TAGS = {"codex": "ChatGPT", "zcode": "GLM", "antigravity": "Google"}
+_PROVIDER_TAGS = {"codex": "ChatGPT", "zcode": "GLM", "antigravity": "Gemini"}
 
 # Compatibility constants for callers that used the original classic palette.
 BG = _PALETTES["classic"]["background"]
@@ -98,8 +98,8 @@ def short(draw: ImageDraw.ImageDraw, text: object, ft: ImageFont.ImageFont, widt
 def number(value: int | None) -> str:
     if value is None:
         return "—"
-    if value >= 100_000_000:
-        return f"{value / 100_000_000:.2f}亿"
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
     if value >= 1_000_000:
         return f"{value / 1_000_000:.2f}M"
     if value >= 1_000:
@@ -221,11 +221,6 @@ def _mix_color(base: str, accent: str, factor: float) -> str:
     return "#" + "".join(f"{round(a + (b - a) * factor):02X}" for a, b in zip(first, second))
 
 
-def _ordered_models(data: dict) -> list[dict]:
-    subscription = data.get("subscription") or {}
-    values = [item for item in subscription.get("quota_windows", []) if isinstance(item, dict)]
-    # Known entries remain first without mutating the source list.
-    return sorted(values, key=lambda item: not bool(item.get("known")))
 
 
 def _window_percent(window: dict | None) -> float | None:
@@ -248,53 +243,23 @@ def _window_reset(window: dict | None) -> str:
         return "重置时间待更新"
 
 
-def _footer_model_items(metrics: dict, max_models: int = 6) -> list[dict]:
-    """Return model rows after the primary window already shown in the bar."""
-    models = metrics.get("models", [])
-    if len(models) <= 1:
-        return []
-    return models[1:max_models + 1]
 
 
 def _agent_metrics(data: dict, today: str | None = None) -> dict:
-    provider = data.get("provider")
     subscription = data.get("subscription") or {}
-    models = _ordered_models(data) if provider == "antigravity" else []
-    known_models = [item for item in models if item.get("known")]
-    active = _active_task_count(data)
-    count = len(known_models) if provider == "antigravity" else active
-    if provider == "antigravity":
-        primary = models[0] if models else {}
-    else:
-        primary = subscription.get("weekly") or {}
-    if provider == "antigravity":
-        windows = models[:6]
-    else:
-        windows = [subscription.get("five_hour") or {}, subscription.get("weekly") or {}]
     tokens = data.get("tokens") or {}
-    token_value = tokens.get("total") if tokens.get("known") else None
-    token_date = tokens.get("date") or ""
     date_label = "今日 TOKENS"
-    if token_date:
-        try:
-            if token_date != (today or datetime.now().astimezone().date().isoformat()):
-                date_label = str(token_date)[5:].replace("-", "/") + " TOKENS"
-        except (TypeError, ValueError):
-            pass
-    if provider == "antigravity":
-        second = models[1] if len(models) > 1 else {}
-        date_label = clean(second.get("label") or second.get("model") or "模型额度待更新")
-        token_value = _window_percent(second)
+    token_date = tokens.get("date") or ""
+    if token_date and token_date != (today or datetime.now().astimezone().date().isoformat()):
+        date_label = str(token_date)[5:].replace("-", "/") + " TOKENS"
     return {
-        "provider": provider,
+        "provider": data.get("provider"),
         "subscription": subscription,
-        "models": models,
-        "known_models": known_models,
-        "count": count,
-        "primary": primary,
-        "windows": windows,
+        "count": _active_task_count(data),
+        "primary": subscription.get("weekly") or {},
+        "windows": [subscription.get("five_hour") or {}, subscription.get("weekly") or {}],
         "tokens": tokens,
-        "token_value": token_value,
+        "token_value": tokens.get("total") if tokens.get("known") else None,
         "date_label": date_label,
         "busy": activity_state(data) == "busy",
     }
@@ -353,22 +318,7 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     icon = logo(logo_brand) if logo_brand else None
     title_x = left
     if image is not None and icon is not None:
-        icon = icon.copy()
-        if logo_brand == "chatgpt":
-            # The official ChatGPT mark is white and transparent; a neutral
-            # badge keeps it visible on the light Paper surface without tinting it.
-            badge_size = 34
-            badge_y = y + 18
-            draw.rounded_rectangle((left - 3, badge_y, left - 3 + badge_size, badge_y + badge_size),
-                                   radius=9, fill="#101010")
-            icon.thumbnail((27, 27), Image.Resampling.LANCZOS)
-            image.paste(icon, (left - 3 + (badge_size - icon.width) // 2,
-                               badge_y + (badge_size - icon.height) // 2), icon)
-            title_x += 42
-        else:
-            icon.thumbnail((27, 27), Image.Resampling.LANCZOS)
-            image.paste(icon, (left, y + 20 + max(0, (28 - icon.height) // 2)), icon)
-            title_x += 36
+        title_x += 42 if logo_brand == "chatgpt" else 36
 
     state_font = font(18, True, scale=scale)
     title_font = font(32 if provider != "antigravity" else 29, True, scale=scale)
@@ -386,7 +336,22 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
 
     available = max(0, chip_left - title_x - 10)
     name = short(draw, data.get("name", "Agent"), title_font, available)
-    draw.text((title_x, y + 17), name, fill=accent, font=title_font)
+    title_y = y + 17
+    _, ink_top, _, ink_bottom = draw.textbbox((title_x, title_y), name, font=title_font)
+    center_y = (ink_top + ink_bottom) / 2
+    if image is not None and icon is not None:
+        icon = icon.copy()
+        icon.thumbnail((27, 27), Image.Resampling.LANCZOS)
+        if logo_brand == "chatgpt":
+            badge_size = 34
+            badge_y = round(center_y - badge_size / 2)
+            draw.rounded_rectangle((left - 3, badge_y, left - 3 + badge_size, badge_y + badge_size),
+                                   radius=9, fill="#101010")
+            icon_x = left - 3 + (badge_size - icon.width) // 2
+        else:
+            icon_x = left
+        image.paste(icon, (icon_x, round(center_y - icon.height / 2)), icon)
+    draw.text((title_x, title_y), name, fill=accent, font=title_font)
     title_width = draw.textlength(name, font=title_font)
     tag = _PROVIDER_TAGS.get(provider)
     if tag:
@@ -402,17 +367,14 @@ def _draw_progress(draw: ImageDraw.ImageDraw, left: int, right: int, y: int, dat
     colors, scale = design["colors"], design["font_scale"]
     provider = metrics["provider"]
     window = metrics["primary"]
-    if provider == "antigravity":
-        title = window.get("label") or window.get("model") or "模型额度待更新"
-    else:
-        title = "周额度剩余"
+    title = "周额度剩余"
     percent = _window_percent(window)
     title_font = font(18 if compact else 20, scale=scale)
     pct_font = font(20 if compact else 22, True, True, scale)
     usable = right - left
     if percent is None:
         text = "额度待更新"
-        draw.text((left, y), short(draw, text if provider != "antigravity" else title, title_font, usable),
+        draw.text((left, y), short(draw, text, title_font, usable),
                   fill=colors["muted"], font=title_font)
     else:
         title_width = max(60, usable - int(draw.textlength(f"{percent:g}%", font=pct_font)) - 20)
@@ -451,17 +413,10 @@ def _draw_token_block(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, wid
     colors, scale = design["colors"], design["font_scale"]
     tokens = metrics["tokens"]
     value = metrics["token_value"]
-    if metrics["provider"] == "antigravity":
-        main = f"{value:g}%" if isinstance(value, (int, float)) else "—"
-        label = metrics["date_label"]
-        second = metrics["models"][1] if len(metrics["models"]) > 1 else {}
-        detail = _window_reset(second)
-        tail = "服务端额度记录"
-    else:
-        main = number(value if isinstance(value, int) and not isinstance(value, bool) else None)
-        label = metrics["date_label"]
-        detail = f"入 {number(tokens.get('input'))}  /  出 {number(tokens.get('output'))}"
-        tail = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
+    main = number(value if isinstance(value, int) and not isinstance(value, bool) else None)
+    label = metrics["date_label"]
+    detail = f"入 {number(tokens.get('input'))}  /  出 {number(tokens.get('output'))}"
+    tail = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
     label_font, main_font = font(16, scale=scale), font(size, True, True, scale)
     detail_font, tail_font = font(16, scale=scale), font(14, scale=scale)
     draw.text((x, y), short(draw, label, label_font, width), fill=colors["muted"], font=label_font)
@@ -472,38 +427,8 @@ def _draw_token_block(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, wid
 
 
 def _draw_footer_windows(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, width: int,
-                         design: dict, metrics: dict, max_models: int = 6) -> None:
+                         design: dict, metrics: dict) -> None:
     colors, scale = design["colors"], design["font_scale"]
-    if metrics["provider"] == "antigravity":
-        items = _footer_model_items(metrics, max_models)
-        count = max(1, min(3, math.ceil(len(items) / 2)))
-        col_gap = 10
-        col_width = (width - col_gap) // 2
-        row_height = 36 if count >= 3 else 38
-        label_font, value_font, reset_font = font(14, scale=scale), font(15, True, True, scale), font(15, scale=scale)
-        for index, item in enumerate(items):
-            row, col = divmod(index, 2)
-            start_x = x + col * (col_width + col_gap)
-            start_y = y + row * row_height
-            label = item.get("label") or item.get("model") or "模型额度"
-            percent = _window_percent(item)
-            pct_text = "—" if percent is None else f"{percent:g}%"
-            value_w = draw.textlength(pct_text, font=value_font)
-            draw.text((start_x, start_y), short(draw, label, label_font, col_width - value_w - 7),
-                      fill=colors["muted"], font=label_font)
-            draw.text((start_x + col_width - value_w, start_y - 1), pct_text,
-                      fill=colors.get("antigravity", colors["text"]), font=value_font)
-            reset = _window_reset(item).replace("重置 ", "")
-            draw.text((start_x, start_y + 17), short(draw, reset, reset_font, col_width),
-                      fill=colors["subtle"], font=reset_font)
-        if not items:
-            models = metrics["models"]
-            if len(models) == 1:
-                draw.text((x, y), short(draw, _window_reset(models[0]), reset_font, width),
-                          fill=colors["subtle"], font=reset_font)
-            else:
-                draw.text((x, y), "模型额度待更新", fill=colors["subtle"], font=label_font)
-        return
 
     subscription = metrics["subscription"]
     windows = [(subscription.get("five_hour") or {}, "5小时"), (subscription.get("weekly") or {}, "周额度")]
@@ -530,35 +455,30 @@ def _draw_agent_classic(image: Image.Image | None, draw: ImageDraw.ImageDraw, da
     left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
     metrics = _agent_metrics(data, now.date().isoformat())
     small, large = font(20, scale=scale), font(56, True, True, scale)
-    label = "已读取额度的模型" if provider == "antigravity" else "正在进行中的任务"
+    label = "正在进行中的任务"
     count = str(metrics["count"]) if isinstance(metrics["count"], int) else "—"
     draw.text((left, y + 75), label, fill=colors["muted"], font=small)
     draw.text((left, y + 101), count, fill=colors["text"], font=large)
     count_width = draw.textlength(count, font=large)
-    draw.text((left + count_width + 16, y + 131), "个模型" if provider == "antigravity" else "个任务",
+    draw.text((left + count_width + 16, y + 131), "个任务",
               fill=colors["muted"], font=font(21, scale=scale))
     metadata_x = left + 215
     _draw_plan(draw, data, metadata_x, y + 72, right - metadata_x, design, compact=True)
     _draw_progress(draw, left, right, y + 179, data, design, metrics)
 
-    if provider == "antigravity":
-        band_y = y + 219
-        draw.line((left, band_y, right, band_y), fill=colors["edge"], width=1)
-        _draw_footer_windows(draw, data, left, y + 226, right - left, design, metrics, max_models=6)
-    else:
-        token_y = y + 230
-        draw.text((left, token_y), short(draw, metrics["date_label"], font(16, scale=scale), 190),
-                  fill=colors["muted"], font=font(16, scale=scale))
-        token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-        draw.text((left, token_y + 20), token_value, fill=colors["text"], font=font(38, True, True, scale))
-        detail = f"入 {number((metrics['tokens'] or {}).get('input'))} / 出 {number((metrics['tokens'] or {}).get('output'))}"
-        cached = f"缓存 {number((metrics['tokens'] or {}).get('cached'))}" if (metrics["tokens"] or {}).get("known") else "本地记录暂无用量"
-        draw.text((left + 205, token_y + 10), short(draw, detail, font(17, scale=scale), right - left - 210),
-                  fill=colors["muted"], font=font(17, scale=scale))
-        draw.text((left + 205, token_y + 39), short(draw, cached, font(15, scale=scale), right - left - 210),
-                  fill=colors["subtle"], font=font(15, scale=scale))
-        draw.line((left, y + 293, right, y + 293), fill=colors["edge"], width=1)
-        _draw_footer_windows(draw, data, left, y + 301, right - left, design, metrics)
+    token_y = y + 230
+    draw.text((left, token_y), short(draw, metrics["date_label"], font(16, scale=scale), 190),
+              fill=colors["muted"], font=font(16, scale=scale))
+    token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
+    draw.text((left, token_y + 20), token_value, fill=colors["text"], font=font(38, True, True, scale))
+    detail = f"入 {number((metrics['tokens'] or {}).get('input'))} / 出 {number((metrics['tokens'] or {}).get('output'))}"
+    cached = f"缓存 {number((metrics['tokens'] or {}).get('cached'))}" if (metrics["tokens"] or {}).get("known") else "本地记录暂无用量"
+    draw.text((left + 205, token_y + 10), short(draw, detail, font(17, scale=scale), right - left - 210),
+              fill=colors["muted"], font=font(17, scale=scale))
+    draw.text((left + 205, token_y + 39), short(draw, cached, font(15, scale=scale), right - left - 210),
+              fill=colors["subtle"], font=font(15, scale=scale))
+    draw.line((left, y + 293, right, y + 293), fill=colors["edge"], width=1)
+    _draw_footer_windows(draw, data, left, y + 301, right - left, design, metrics)
     if data.get("stale"):
         draw.text((left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新",
                   fill=colors["subtle"], font=font(14, scale=scale))
@@ -573,61 +493,51 @@ def _draw_agent_aurora(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
     metrics = _agent_metrics(data, now.date().isoformat())
     count = str(metrics["count"]) if isinstance(metrics["count"], int) else "—"
-    label = "已读取额度的模型" if provider == "antigravity" else "正在进行中的任务"
+    label = "正在进行中的任务"
     count_font = font(54, True, True, scale)
     draw.text((left, y + 75), label, fill=colors["muted"], font=font(18, scale=scale))
     draw.text((left, y + 99), count, fill=colors["text"], font=count_font)
     draw.text((left + draw.textlength(count, font=count_font) + 14, y + 128),
-              "个模型" if provider == "antigravity" else "个任务", fill=colors["muted"], font=font(19, scale=scale))
+              "个任务", fill=colors["muted"], font=font(19, scale=scale))
 
     quota_left = x + width // 2 + 5
     _draw_progress(draw, quota_left, right, y + 85, data, design, metrics, compact=True)
-    if provider != "antigravity":
-        weekly = metrics["primary"]
-        draw.text((quota_left, y + 123), short(draw, _window_reset(weekly), font(14, scale=scale), right - quota_left),
-                  fill=colors["subtle"], font=font(14, scale=scale))
+    weekly = metrics["primary"]
+    draw.text((quota_left, y + 123), short(draw, _window_reset(weekly), font(14, scale=scale), right - quota_left),
+              fill=colors["subtle"], font=font(14, scale=scale))
 
     plan_x = left
     plan_y = y + 157
     plan_width = right - left
-    if provider == "antigravity":
-        subscription = metrics["subscription"]
-        plan_font = font(14, scale=scale)
-        plan_lines = (
-            "套餐 " + (subscription.get("plan_name") or "待填写"),
-            "规格 " + (subscription.get("plan_spec") or "待填写"),
-            expiry_text(subscription.get("expires_at")),
-        )
-        for index, text in enumerate(plan_lines):
-            line_y = y + 151 + index * 18
-            draw.text((plan_x, line_y), short(draw, text, plan_font, plan_width),
-                      fill=colors["muted"] if index < 2 else colors["subtle"], font=plan_font)
-    else:
-        subscription = metrics["subscription"]
-        line_font = font(15, scale=scale)
-        plan_text = f"订阅 {subscription.get('plan_name') or '套餐待填写'}  ·  {subscription.get('plan_spec') or '规格待填写'}  ·  {expiry_text(subscription.get('expires_at'))}"
-        draw.text((left, plan_y), short(draw, plan_text, line_font, plan_width), fill=colors["subtle"], font=line_font)
+    subscription = metrics["subscription"]
+    line_font = font(15, scale=scale)
+    plan_text = "订阅 " + (subscription.get("plan_name") or "套餐待填写")
+    draw.text((left, plan_y), short(draw, plan_text, line_font, plan_width), fill=colors["subtle"], font=line_font)
+    detail_font = font(14, scale=scale)
+    expiry = expiry_text(subscription.get("expires_at"))
+    expiry_width = draw.textlength(expiry, font=detail_font)
+    spec_width = max(0, plan_width - expiry_width - 16)
+    draw.text((left, plan_y + 21), short(draw, "规格 " + (subscription.get("plan_spec") or "待填写"),
+                                     detail_font, spec_width), fill=colors["muted"], font=detail_font)
+    draw.text((right - expiry_width, plan_y + 21), expiry, fill=colors["subtle"], font=detail_font)
 
     band_y = y + 211
     band_bottom = y + height - 14
     draw.rounded_rectangle((x + 16, band_y, x + width - 16, band_bottom), radius=max(12, design["radius"] - 5),
                            fill=colors["surface_alt"], outline=_mix_color(colors["edge"], colors["codex"], 0.24), width=1)
-    if provider == "antigravity":
-        _draw_footer_windows(draw, data, left + 8, band_y + 12, right - left - 16, design, metrics, max_models=6)
-    else:
-        tokens = metrics["tokens"] or {}
-        token_total = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-        draw.text((left + 10, band_y + 12), short(draw, metrics["date_label"], font(15, scale=scale), 190),
-                  fill=colors["muted"], font=font(15, scale=scale))
-        draw.text((left + 10, band_y + 30), token_total, fill=colors["text"], font=font(34, True, True, scale))
-        right_detail = f"入 {number(tokens.get('input'))} / 出 {number(tokens.get('output'))}"
-        cached = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
-        detail_x = left + 198
-        draw.text((detail_x, band_y + 28), short(draw, right_detail, font(16, scale=scale), right - detail_x - 8),
-                  fill=colors["muted"], font=font(16, scale=scale))
-        draw.text((detail_x, band_y + 54), short(draw, cached, font(14, scale=scale), right - detail_x - 8),
-                  fill=colors["subtle"], font=font(14, scale=scale))
-        _draw_footer_windows(draw, data, left + 8, band_y + 82, right - left - 16, design, metrics)
+    tokens = metrics["tokens"] or {}
+    token_total = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
+    draw.text((left + 10, band_y + 12), short(draw, metrics["date_label"], font(15, scale=scale), 190),
+              fill=colors["muted"], font=font(15, scale=scale))
+    draw.text((left + 10, band_y + 30), token_total, fill=colors["text"], font=font(34, True, True, scale))
+    right_detail = f"入 {number(tokens.get('input'))} / 出 {number(tokens.get('output'))}"
+    cached = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
+    detail_x = left + 198
+    draw.text((detail_x, band_y + 28), short(draw, right_detail, font(16, scale=scale), right - detail_x - 8),
+              fill=colors["muted"], font=font(16, scale=scale))
+    draw.text((detail_x, band_y + 54), short(draw, cached, font(14, scale=scale), right - detail_x - 8),
+              fill=colors["subtle"], font=font(14, scale=scale))
+    _draw_footer_windows(draw, data, left + 8, band_y + 82, right - left - 16, design, metrics)
     if data.get("stale"):
         draw.text((left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新",
                   fill=colors["subtle"], font=font(14, scale=scale))
@@ -641,20 +551,20 @@ def _draw_agent_paper(image: Image.Image | None, draw: ImageDraw.ImageDraw, data
     _card(draw, x, y, width, height, design, provider)
     left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
     metrics = _agent_metrics(data, now.date().isoformat())
-    label = "已读取额度的模型" if provider == "antigravity" else "ACTIVE TASKS  ·  进行中任务"
+    label = "ACTIVE TASKS  ·  进行中任务"
     count = str(metrics["count"]) if isinstance(metrics["count"], int) else "—"
     count_font = font(54, True, True, scale)
     draw.text((left, y + 72), label, fill=colors["muted"], font=font(17, scale=scale))
     draw.text((left, y + 92), count, fill=colors["text"], font=count_font)
     draw.text((left + draw.textlength(count, font=count_font) + 13, y + 119),
-              "个模型" if provider == "antigravity" else "个任务", fill=colors["muted"], font=font(17, scale=scale))
+              "个任务", fill=colors["muted"], font=font(17, scale=scale))
 
     plan_x = x + width // 2 + 7
     _draw_plan(draw, data, plan_x, y + 72, right - plan_x, design, compact=True)
     draw.line((left, y + 153, right, y + 153), fill=colors["edge"], width=1)
 
     quota = metrics["primary"]
-    title = quota.get("label") or quota.get("model") or "模型额度" if provider == "antigravity" else "周额度剩余"
+    title = "周额度剩余"
     percent = _window_percent(quota)
     pct_text = "—" if percent is None else f"{percent:g}%"
     draw.text((left, y + 164), short(draw, title, font(18, scale=scale), width - 140),
@@ -668,26 +578,21 @@ def _draw_agent_paper(image: Image.Image | None, draw: ImageDraw.ImageDraw, data
         draw.rectangle((left, bar_y, left + max(5, round((right - left) * percent / 100)), bar_y + 6),
                        fill=colors.get(provider, colors["working"]))
 
-    if provider == "antigravity":
-        # Paper uses a compact two-column editorial ledger, retaining all six
-        # published model windows and each reset timestamp without inventing tokens.
-        _draw_footer_windows(draw, data, left, y + 212, right - left, design, metrics, max_models=6)
-    else:
-        tokens = metrics["tokens"] or {}
-        token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-        draw.line((left, y + 211, right, y + 211), fill=colors["edge"], width=1)
-        draw.text((left, y + 222), short(draw, metrics["date_label"], font(15, scale=scale), 185),
-                  fill=colors["muted"], font=font(15, scale=scale))
-        draw.text((left, y + 242), token_value, fill=colors["text"], font=font(34, True, True, scale))
-        detail_x = left + 200
-        token_detail = f"输入 {number(tokens.get('input'))}  ·  输出 {number(tokens.get('output'))}"
-        cache_detail = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
-        draw.text((detail_x, y + 237), short(draw, token_detail, font(15, scale=scale), right - detail_x),
-                  fill=colors["muted"], font=font(15, scale=scale))
-        draw.text((detail_x, y + 262), short(draw, cache_detail, font(14, scale=scale), right - detail_x),
-                  fill=colors["subtle"], font=font(14, scale=scale))
-        draw.line((left, y + 292, right, y + 292), fill=colors["edge"], width=1)
-        _draw_footer_windows(draw, data, left, y + 302, right - left, design, metrics)
+    tokens = metrics["tokens"] or {}
+    token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
+    draw.line((left, y + 211, right, y + 211), fill=colors["edge"], width=1)
+    draw.text((left, y + 222), short(draw, metrics["date_label"], font(15, scale=scale), 185),
+              fill=colors["muted"], font=font(15, scale=scale))
+    draw.text((left, y + 242), token_value, fill=colors["text"], font=font(34, True, True, scale))
+    detail_x = left + 200
+    token_detail = f"输入 {number(tokens.get('input'))}  ·  输出 {number(tokens.get('output'))}"
+    cache_detail = f"缓存 {number(tokens.get('cached'))}" if tokens.get("known") else "本地记录暂无用量"
+    draw.text((detail_x, y + 237), short(draw, token_detail, font(15, scale=scale), right - detail_x),
+              fill=colors["muted"], font=font(15, scale=scale))
+    draw.text((detail_x, y + 262), short(draw, cache_detail, font(14, scale=scale), right - detail_x),
+              fill=colors["subtle"], font=font(14, scale=scale))
+    draw.line((left, y + 292, right, y + 292), fill=colors["edge"], width=1)
+    _draw_footer_windows(draw, data, left, y + 302, right - left, design, metrics)
     if data.get("stale"):
         draw.text((left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新",
                   fill=colors["subtle"], font=font(14, scale=scale))

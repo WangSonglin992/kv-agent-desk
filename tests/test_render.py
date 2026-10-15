@@ -1,11 +1,13 @@
 import unittest
 from copy import deepcopy
 from datetime import datetime
-from PIL import ImageChops
+from PIL import Image, ImageChops, ImageDraw
 from agent_dashboard.render import (
     activity_state,
     _agent_metrics,
-    _footer_model_items,
+    _draw_agent_header,
+    _resolve_design,
+    font,
     animation_period,
     expiry_text,
     is_animated,
@@ -27,6 +29,10 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(number(None), "—")
         self.assertEqual(number(1000), "1.0K")
         self.assertEqual(number(1234567), "1.23M")
+        self.assertEqual(number(100_000_000), "100.00M")
+        self.assertEqual(number(123_000_000), "123.00M")
+        self.assertEqual(number(1_000_000_000), "1.00B")
+        self.assertTrue(all(number(value).isascii() for value in (10, 1000, 1234567, 123000000, 1000000000)))
 
     def test_task_names_and_plan_do_not_appear_on_screen(self):
         stamp = datetime(2026, 10, 15, 12, 0).astimezone()
@@ -83,7 +89,10 @@ class RenderTests(unittest.TestCase):
                     "stale": False, "tokens": {"known": False},
                     "subscription": {
                         "plan_name": "Synthetic Google Plan", "plan_spec": "Synthetic tier",
-                        "expires_at": "2035-03-04", "quota_windows": [
+                        "expires_at": "2035-03-04", "quota_group": "gemini",
+                        "five_hour": {"known": True, "remaining_percent": 80, "reset_at": "2035-01-02T17:00:00Z"},
+                        "weekly": {"known": True, "remaining_percent": 64, "reset_at": "2035-01-06T12:00:00Z"},
+                        "quota_windows": [
                             {"known": True, "label": f"Synthetic Model {index}", "model": f"model-{index}",
                              "remaining_percent": 90 - index, "reset_at": "2035-01-06T12:00:00Z"}
                             for index in range(6)
@@ -197,53 +206,59 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(activity_state(agent), "busy")
         self.assertEqual(animation_period(agent), 0.65)
 
-    def test_antigravity_footer_omits_primary_and_keeps_next_six_models(self):
-        agent = {
-            "provider": "antigravity", "state": "unknown", "active_tasks": None,
-            "active_tasks_known": False,
-            "subscription": {"quota_windows": [
-                {"known": True, "label": f"Synthetic Model {index}", "model": f"model-{index}",
-                 "remaining_percent": 90 - index, "reset_at": "2035-01-06T12:00:00Z"}
-                for index in range(7)
-            ]},
-        }
+    def test_antigravity_uses_shared_windows_without_inventing_tasks_or_tokens(self):
+        agent = self.sample_snapshot()["agents"][2]
         metrics = _agent_metrics(agent, "2035-01-02")
-        self.assertEqual([item["label"] for item in _footer_model_items(metrics)],
-                         [f"Synthetic Model {index}" for index in range(1, 7)])
-        one_model = {**agent, "subscription": {"quota_windows": [agent["subscription"]["quota_windows"][0]]}}
-        self.assertEqual(_footer_model_items(_agent_metrics(one_model, "2035-01-02")), [])
-        empty = {**agent, "subscription": {"quota_windows": []}}
-        self.assertEqual(_footer_model_items(_agent_metrics(empty, "2035-01-02")), [])
+        self.assertIsNone(metrics["count"])
+        self.assertIsNone(metrics["token_value"])
+        self.assertEqual(metrics["date_label"], "今日 TOKENS")
+        self.assertEqual(metrics["primary"]["remaining_percent"], 64)
+        self.assertEqual([w["remaining_percent"] for w in metrics["windows"]], [80, 64])
 
-    def test_aurora_antigravity_plan_name_spec_and_expiry_survive_model_band(self):
+    def test_model_rows_including_claude_and_gpt_never_change_shared_card(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        agent = self.sample_snapshot()["agents"][2]
+        changed = deepcopy(agent)
+        changed["subscription"]["quota_windows"] = [
+            {"known": True, "model": name, "label": name, "remaining_percent": pct}
+            for name, pct in (("Claude Demo", 1), ("GPT Demo", 0), ("Gemini Demo", 99))]
+        for layout in ("classic", "aurora", "paper"):
+            profile = {"id": layout, "layout": layout}
+            first = render({"agents": [agent]}, stamp, profile, animation_time=0)
+            second = render({"agents": [changed]}, stamp, profile, animation_time=0)
+            self.assertIsNone(ImageChops.difference(first, second).getbbox(), layout)
+
+    def test_aurora_all_plan_fields_remain_visible_in_common_layout(self):
         stamp = datetime(2035, 1, 2, 12, 0).astimezone()
         snapshot = self.sample_snapshot()
         profile = {"id": "aurora", "layout": "aurora"}
-        original = render(snapshot, stamp, profile, animation_time=0.0)
-        plan_region = (1140, 220, 1630, 285)
-        base = original.crop(plan_region)
+        original = render(snapshot, stamp, profile, animation_time=0)
+        region = (1140, 220, 1630, 285)
         for field, value in (("plan_name", "Different synthetic plan"),
                              ("plan_spec", "Different synthetic tier"),
                              ("expires_at", "2036-04-05")):
             changed = deepcopy(snapshot)
             changed["agents"][2]["subscription"][field] = value
-            image = render(changed, stamp, profile, animation_time=0.0).crop(plan_region)
-            with self.subTest(field=field):
-                self.assertIsNotNone(ImageChops.difference(base, image).getbbox())
+            modified = render(changed, stamp, profile, animation_time=0)
+            self.assertIsNotNone(ImageChops.difference(original.crop(region), modified.crop(region)).getbbox(), field)
 
-    def test_aurora_single_antigravity_model_keeps_its_reset_line(self):
-        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
-        profile = {"id": "aurora", "layout": "aurora"}
-        window = {"known": True, "label": "Synthetic Model", "remaining_percent": 88,
-                  "reset_at": "2035-01-06T12:00:00Z"}
-        snapshot = {"agents": [{"provider": "antigravity", "state": "unknown", "active_tasks": None,
-                                "active_tasks_known": False,
-                                "subscription": {"quota_windows": [window]}}]}
-        original = render(snapshot, stamp, profile, animation_time=0.0).crop((52, 285, 530, 330))
-        changed = deepcopy(snapshot)
-        changed["agents"][0]["subscription"]["quota_windows"][0]["reset_at"] = "2035-02-07T12:00:00Z"
-        modified = render(changed, stamp, profile, animation_time=0.0).crop((52, 285, 530, 330))
-        self.assertIsNotNone(ImageChops.difference(original, modified).getbbox())
+    def test_provider_logos_are_centered_on_name_ink(self):
+        for provider, name in (("codex", "Codex"), ("zcode", "ZCode"), ("antigravity", "Antigravity")):
+            for layout in ("classic", "aurora", "paper"):
+                design = _resolve_design({"layout": layout})
+                surface = design["colors"]["surface"]
+                image = Image.new("RGB", (1920, 480), surface)
+                draw = ImageDraw.Draw(image)
+                data = {"provider": provider, "name": name, "state": "idle"}
+                _draw_agent_header(image, draw, data, 24, 76, 528, design, 0)
+                title_font = font(29 if provider == "antigravity" else 32, True)
+                _, top, _, bottom = draw.textbbox((0, 93), name, font=title_font)
+                region = (49, 82, 84, 146)
+                pixels = image.crop(region)
+                bbox = ImageChops.difference(pixels, Image.new("RGB", pixels.size, surface)).getbbox()
+                self.assertIsNotNone(bbox)
+                actual = region[1] + (bbox[1] + bbox[3]) / 2
+                self.assertLessEqual(abs(actual - (top + bottom) / 2), 1.5, (provider, layout))
 
     def test_unreliable_count_does_not_trigger_busy(self):
         agent = {"provider": "zcode", "state": "working", "active_tasks": 8,

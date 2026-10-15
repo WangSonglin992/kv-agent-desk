@@ -52,15 +52,17 @@ def ui_demo_snapshot() -> dict:
         row = empty_agent(provider, name)
         row.update(available=True, state="working" if tasks else "unknown", active_tasks=tasks,
                    state_label="工作中" if tasks else "状态未知", updated_at=stamp,
-                   tokens={"known": total is not None, "total": total, "input": 60000,
-                           "output": 5432, "cached": 30000, "scope": "today"})
+                   tokens={"known": total is not None, "total": total,
+                           "input": total - 5432 if total is not None else None,
+                           "output": 5432 if total is not None else None,
+                           "cached": 30000 if total is not None else None, "scope": "today"})
         quota = {"name": name, "plan_name": "示例套餐", "plan_spec": "演示规格", "expires_at": "2035-12-31",
                  "five_hour": {"known": True, "remaining_percent": 85, "reset_at": reset},
                  "weekly": {"known": True, "remaining_percent": remaining, "reset_at": reset}}
         if provider == "antigravity":
-            quota["quota_windows"] = [{"model": f"demo-{i}", "label": f"Demo Model {chr(65+i)}",
-                                       "known": True, "remaining_percent": percent, "reset_at": reset}
-                                      for i, percent in enumerate((80, 64, 91))]
+            quota["quota_group"] = "gemini"
+            quota["five_hour"] = {"known": True, "remaining_percent": 80, "reset_at": reset}
+            quota["weekly"] = {"known": True, "remaining_percent": 64, "reset_at": "2035-06-19T10:00:00+08:00"}
         row["subscription"] = quota
         agents.append(row)
     accounts = [{"id": key, "name": "Demo", "brand": "deepseek", "kind": "balance",

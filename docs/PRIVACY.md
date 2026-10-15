@@ -9,7 +9,7 @@ KV Agent Desk 在本机读取 Agent 状态并生成屏幕画面。它没有遥�
 | Codex | 本地 session JSONL 中的生命周期、任务状态和 Token 统计事件 | 推导状态、进行中任务数、当日 Token 与已观察到的额度窗口。适配器不调用 Codex 账户 API，也不读取认证令牌。 |
 | ZCode | 本地 SQLite 数据库中的会话、工具/轮次状态和请求级 Token 统计 | 生成工作状态、任务数和当日 Token。数据库以 SQLite 只读模式打开；适配器不读消息正文或工具参数。 |
 | ZCode Coding Plan | 当前选中的套餐 provider 配置中的 API Key 与服务地址 | 仅在已识别的官方 HTTPS 来源上，以额度/订阅 GET 请求获取使用百分比、重置时间和套餐元数据；不向未识别来源发送 Key，不跟随重定向。 |
-| Antigravity | 已运行的官方客户端进程信息、本机 language server 的端口/CSRF 值（仅内存中） | 向该进程拥有的本机接口请求模型额度快照。CSRF 值不会写入应用缓存或日志；应用不启动推理请求。 |
+| Antigravity | 已运行的官方客户端进程信息、本机 language server 的端口/CSRF 值（仅内存中） | 向该进程拥有的本机接口请求 Gemini 共享额度摘要。CSRF 值不会写入应用缓存或日志；应用不启动推理请求。 |
 | DeepSeek | 仅指定的 `DeepSeek_public`、`DeepSeek_personal` 环境变量或对应 Windows Environment 注册表值 | 将账户 Key 放在 HTTPS 请求头中调用 DeepSeek 官方余额 GET 接口，读取余额与币种。Key 不放入 URL、命令行、日志或应用缓存，也不用于推理。 |
 | 手动订阅资料 | 控制页填写的套餐名、规格和到期日期 | 在本机补充无法自动读取的套餐资料并显示在对应 Agent 卡片中。 |
 
@@ -20,7 +20,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 - Codex 数据从本地文件读取，不联网。
 - ZCode 额度查询只针对代码中允许的 Z.ai / BigModel 官方 HTTPS 主机；仅在本机当前选择 Coding Plan provider 时尝试。请求至少间隔 60 秒，并拒绝重定向。
 - DeepSeek 余额请求只到官方 HTTPS API，至少间隔 60 秒；每次请求都是只读 GET。
-- Antigravity 配额请求发往正在运行的本机 language server；该客户端可能依照其自身行为与 Google 服务通信。本应用不会为 Antigravity 登录账号或发送模型推理请求。
+- Antigravity Gemini 配额请求发往正在运行的本机 language server；该客户端可能依照其自身行为与 Google 服务通信。本应用不会为 Antigravity 登录账号或发送模型推理请求。
 - 本机控制页通过回环接口提供服务，不向局域网监听，也不会将状态同步到云端。
 
 请求失败、来源数据缺失或时间过久时，应用优先保留最后成功读取的值，并附加“数据待检查更新”提示。未知值不会填成 0% 或 100%。默认过期提示时间为 300 秒；额度接口自身有更长刷新间隔。

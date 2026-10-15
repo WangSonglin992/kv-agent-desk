@@ -95,6 +95,40 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(result["subscription"]["quota_windows"][0]["remaining_percent"], 60)
         self.assertNotIn("weekly", result["subscription"])
 
+    def test_shared_quota_windows_retain_by_window_not_duplicate_model_name(self):
+        store = LastGoodStore()
+        old = dict(self.good, provider="antigravity", name="Antigravity", subscription={
+            "five_hour": {"known": True, "remaining_percent": 82},
+            "weekly": {"known": True, "remaining_percent": 47},
+            "quota_windows": [
+                {"window": "five_hour", "model": "Gemini", "label": "5小时", "known": True,
+                 "remaining_percent": 82},
+                {"window": "weekly", "model": "Gemini", "label": "周额度", "known": True,
+                 "remaining_percent": 47},
+            ],
+        })
+        store.merge(old, self.now)
+
+        current = dict(self.good, provider="antigravity", name="Antigravity", subscription={
+            "five_hour": {"known": False, "remaining_percent": None},
+            "weekly": {"known": True, "remaining_percent": 39},
+            "quota_windows": [
+                {"window": "five_hour", "model": "Gemini", "label": "5小时", "known": False,
+                 "remaining_percent": None},
+                {"window": "weekly", "model": "Gemini", "label": "周额度", "known": True,
+                 "remaining_percent": 39},
+            ],
+        })
+        result = store.merge(current, self.now + timedelta(minutes=1))
+        subscription = result["subscription"]
+
+        self.assertEqual(subscription["five_hour"]["remaining_percent"], 82)
+        self.assertEqual(subscription["weekly"]["remaining_percent"], 39)
+        self.assertEqual(subscription["quota_windows"][0]["window"], "five_hour")
+        self.assertEqual(subscription["quota_windows"][0]["remaining_percent"], 82)
+        self.assertEqual(subscription["quota_windows"][1]["window"], "weekly")
+        self.assertEqual(subscription["quota_windows"][1]["remaining_percent"], 39)
+
 
 if __name__ == "__main__":
     unittest.main()
