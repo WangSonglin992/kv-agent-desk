@@ -251,6 +251,13 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(activity_state(agent), "working")
         self.assertEqual(animation_period(agent), 2.0)
 
+    def test_retained_last_known_busy_count_keeps_its_status_until_updated(self):
+        agent = {"provider": "zcode", "state": "working", "active_tasks": 4,
+                 "active_tasks_known": False, "retained_fields": ["active_tasks"], "stale": True}
+        self.assertEqual(activity_state(agent), "busy")
+        self.assertEqual(animation_period(agent), .65)
+        self.assertTrue(agent["stale"])
+
 
 if __name__ == "__main__":
     unittest.main()

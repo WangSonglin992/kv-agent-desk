@@ -161,10 +161,11 @@ def _resolve_design(profile: dict | None) -> dict:
 
 def _active_task_count(data: dict) -> int | None:
     """Return only an explicit, reliable task count; never use model counts."""
-    if data.get("provider") == "antigravity" and data.get("active_tasks_known") is not True:
+    retained = "active_tasks" in (data.get("retained_fields") or [])
+    if data.get("provider") == "antigravity" and data.get("active_tasks_known") is not True and not retained:
         return None
     count = data.get("active_tasks")
-    if type(count) is not int or count < 0 or data.get("active_tasks_known") is False:
+    if type(count) is not int or count < 0 or (data.get("active_tasks_known") is False and not retained):
         return None
     return count
 
