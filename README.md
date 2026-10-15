@@ -1,10 +1,10 @@
 # KV Agent Desk
 
-KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalright（利民）KV / Trofeo Vision 9.16 的 USB LCD 用作 Codex、ZCode、Antigravity 与 DeepSeek 账户的状态屏。界面设计参考了 [MacTR AI](https://github.com/m1ng-li/mac-thermalright-ai-monitor) 的 LCD Agent 面板方向；本项目使用独立的 Windows 实现，没有复制该项目的代码或图片。
+KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalright（利民）KV / Trofeo Vision 9.16 的 USB LCD 用作 Codex、ZCode、Antigravity 与 DeepSeek 账户的状态屏。界面设计参考了 [MacTR AI](https://github.com/m1ng-li/mac-thermalright-ai-monitor) 的 LCD Agent 面板方向；本项目使用独立的 Windows 实现。
 
 ![KV Agent Desk 演示画面](docs/images/dashboard-demo.png)
 
-> 上图是合成演示：名称、模型、数值和日期均为虚构，不代表任何真实账户或使用记录。
+> 上图是合成演示：名称、模型、数值和日期均为虚构。
 
 ## 功能
 
@@ -16,7 +16,6 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 - **手动套餐资料**：Codex、ZCode、Antigravity 均可手动补充套餐名称、规格和到期日期；手动填写优先显示，清空后恢复自动信息。
 - **保留最后可信数据**：来源暂不可读或数据过期时继续展示最后值，并用低调提示标记“数据待检查更新”；开机时先恢复上次屏幕画面，再更新来源数据。
 
-LCD 不显示任务名称或计划步骤，只显示进行中的任务数和周额度百分比。未知额度保持未知，不将其伪装为 0% 或 100%。任务数或 Token 用量没有可信当前值且没有可信历史时显示 `0` 占位；已有可信历史继续保留。此时的 `0` 不代表已采集到 0 项任务或 0 Token。
 
 ## 运行要求
 
