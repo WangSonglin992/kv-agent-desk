@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+runtime/
+*.spec
+.pytest_cache/
+.env
+.env.*
+!.env.example
+*.log
+*.sqlite*
+*.db
+*.db-*
+*.zip
+*.exe
+*.pyd
+*.pem
+*.key
+settings.json
+subscriptions.json
+last-good.json
+accounts-last-good.json
+last-frame.png
+# Local development notes can contain real account information.
+PLAN.md
+VERIFICATION.md
+# Personal/unused logos are never part of a public build.
+agent_dashboard/assets/lab.png
+agent_dashboard/assets/glm.png
