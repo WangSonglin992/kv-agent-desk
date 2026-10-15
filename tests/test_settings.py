@@ -73,8 +73,9 @@ class AppSettingsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "nested" / "settings.json"
             settings = AppSettings(path)
-            saved = settings.update({"auto_start": False, "usb_enabled": False})
+            saved = settings.update({"auto_start": False, "usb_enabled": False, "ui_id": "paper"})
             self.assertEqual(AppSettings(path).get(), saved)
+            self.assertEqual(saved["ui_id"], "paper")
             self.assertEqual(set(json.loads(path.read_text(encoding="utf-8"))), set(DEFAULT_SETTINGS))
 
     def test_invalid_updates_raise_without_changing_saved_data(self):
@@ -86,7 +87,7 @@ class AppSettingsTests(unittest.TestCase):
             invalid = [
                 {"brightness": -1}, {"brightness": 101}, {"brightness": True},
                 {"rotation": 90}, {"usb_enabled": 1}, {"auto_start": "yes"},
-                {"lcd_height": 463}, {"other": 1},
+                {"lcd_height": 463}, {"ui_id": "../theme"}, {"ui_id": 1}, {"other": 1},
             ]
             for fields in invalid:
                 with self.subTest(fields=fields), self.assertRaises(ValueError):

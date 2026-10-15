@@ -18,9 +18,13 @@ PUBLIC_FILES = (
     ("LICENSE", "LICENSE"),
     ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
     ("agent_dashboard/assets/SOURCES.md", "assets/SOURCES.md"),
+    ("agent_dashboard/assets/chatgpt.png", "assets/chatgpt.png"),
+    ("agent_dashboard/assets/glm.png", "assets/glm.png"),
+    ("agent_dashboard/assets/google.png", "assets/google.png"),
     ("docs/RELEASING.md", "docs/RELEASING.md"),
     ("docs/PRIVACY.md", "docs/PRIVACY.md"),
     ("docs/EXTENDING.md", "docs/EXTENDING.md"),
+    ("docs/UI-TEMPLATES.md", "docs/UI-TEMPLATES.md"),
     ("docs/images/dashboard-demo.png", "docs/images/dashboard-demo.png"),
 )
 LOCK_FILE = "requirements-build.lock.txt"

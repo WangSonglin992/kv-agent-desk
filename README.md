@@ -80,6 +80,8 @@ dist\KV-Agent-Desk.exe --preview-only
 
 运行缓存和设置保存在 `%LOCALAPPDATA%\KV-Agent-Desk`。请阅读 [隐私说明](docs/PRIVACY.md)，尤其是最近会话统计、账户余额、手动套餐信息和屏幕快照的本机保留方式。
 
+控制页还可切换 `classic`、`aurora` 和 `paper` 三种 LCD 界面样式。应用会记住所选样式，并在下次启动时继续使用。样式可通过 JSON 导入或导出，单个文件最大 64 KiB；模板只保存界面样式，不包含账号、密钥、订阅、会话或 Token 使用数据。详见 [界面模板说明](docs/UI-TEMPLATES.md)。
+
 ## 扩展 Agent 面板
 
 项目按采集适配器、状态保留、渲染和 UI 分层。若要增加一个 Agent，请先阅读 [扩展指南](docs/EXTENDING.md)，其中包含需要新增的适配器契约、注册位置、额度字段处理、渲染和测试步骤。新来源应只采集可核实数据；未知状态应保留为未知，并遵守本地只读与密钥保护原则。

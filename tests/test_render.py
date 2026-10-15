@@ -1,7 +1,18 @@
 import unittest
 from copy import deepcopy
 from datetime import datetime
-from agent_dashboard.render import render, number, expiry_text
+from PIL import ImageChops
+from agent_dashboard.render import (
+    activity_state,
+    _agent_metrics,
+    _footer_model_items,
+    animation_period,
+    expiry_text,
+    is_animated,
+    logo,
+    number,
+    render,
+)
 
 
 class RenderTests(unittest.TestCase):
@@ -25,12 +36,220 @@ class RenderTests(unittest.TestCase):
         changed = deepcopy(data)
         changed["agents"][0]["task"] = "different private task B"
         changed["agents"][0]["progress"]["completed"] = 9
-        self.assertEqual(render(data, stamp).tobytes(), render(changed, stamp).tobytes())
+        first = render(data, stamp)
+        second = render(changed, stamp)
+        self.assertIsNone(ImageChops.difference(first, second).getbbox())
 
     def test_expiry_preserves_date_precision_and_rejects_invalid_dates(self):
         self.assertEqual(expiry_text("2026-11-15"), "到期 2026/11/15")
         self.assertEqual(expiry_text(None), "到期待填写")
         self.assertEqual(expiry_text("invalid-date"), "到期待填写")
+
+    @staticmethod
+    def sample_snapshot():
+        return {
+            "demo": True,
+            "display": {"connected": False},
+            "agents": [
+                {
+                    "provider": "codex", "name": "Codex", "state": "working", "state_label": "工作中",
+                    "active_tasks": 2, "active_tasks_known": True, "stale": True,
+                    "project": "private/project", "task": "private task title", "progress": {"known": True},
+                    "tokens": {"known": True, "total": 123456, "input": 100000, "output": 23456,
+                               "cached": 80000, "date": "2026-10-15"},
+                    "subscription": {
+                        "plan_name": "Synthetic Plan", "plan_spec": "Synthetic monthly plan",
+                        "expires_at": "2035-01-02", "five_hour": {"known": True, "remaining_percent": 85,
+                                                                       "reset_at": "2035-01-02T12:00:00Z"},
+                        "weekly": {"known": True, "remaining_percent": 72,
+                                   "reset_at": "2035-01-04T12:00:00Z"},
+                    },
+                },
+                {
+                    "provider": "zcode", "name": "ZCode", "state": "waiting", "state_label": "等待输入",
+                    "active_tasks": 1, "active_tasks_known": True, "stale": False,
+                    "tokens": {"known": True, "total": 65432, "input": 54000, "output": 11432,
+                               "cached": 31000, "date": "2026-10-15"},
+                    "subscription": {
+                        "plan_name": "Synthetic Coding Plan", "plan_spec": "Synthetic tier",
+                        "expires_at": "2035-02-03", "five_hour": {"known": False},
+                        "weekly": {"known": True, "remaining_percent": 58,
+                                   "reset_at": "2035-01-05T12:00:00Z"},
+                    },
+                },
+                {
+                    "provider": "antigravity", "name": "Antigravity", "state": "unknown",
+                    "state_label": "状态未知", "active_tasks": None, "active_tasks_known": False,
+                    "stale": False, "tokens": {"known": False},
+                    "subscription": {
+                        "plan_name": "Synthetic Google Plan", "plan_spec": "Synthetic tier",
+                        "expires_at": "2035-03-04", "quota_windows": [
+                            {"known": True, "label": f"Synthetic Model {index}", "model": f"model-{index}",
+                             "remaining_percent": 90 - index, "reset_at": "2035-01-06T12:00:00Z"}
+                            for index in range(6)
+                        ],
+                    },
+                },
+            ],
+            "accounts": [
+                {"id": "deepseek_lab", "name": "课题组 DeepSeek", "brand": "deepseek", "kind": "balance",
+                 "known": True, "value": "123.45", "currency": "CNY", "stale": False},
+                {"id": "deepseek_personal", "name": "个人 DeepSeek", "brand": "deepseek", "kind": "balance",
+                 "known": True, "value": "67.89", "currency": "CNY", "stale": True},
+            ],
+        }
+
+    def test_three_profiles_render_distinct_fixed_canvas(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        snapshot = self.sample_snapshot()
+        images = {
+            layout: render(snapshot, stamp, {"id": layout, "layout": layout}, animation_time=0.0)
+            for layout in ("classic", "aurora", "paper")
+        }
+        self.assertEqual({image.size for image in images.values()}, {(1920, 480)})
+        self.assertEqual(len({hash(image.tobytes()) for image in images.values()}), 3)
+
+    def test_provider_and_account_logos_are_local_and_chatgpt_mark_has_neutral_badge(self):
+        for brand in ("chatgpt", "glm", "google", "deepseek"):
+            with self.subTest(brand=brand):
+                self.assertIsNotNone(logo(brand))
+        paper = render(self.sample_snapshot(), datetime(2035, 1, 2, 12, 0).astimezone(),
+                       {"id": "paper", "layout": "paper"}, animation_time=0.0)
+        self.assertEqual(paper.getpixel((50, 111)), (16, 16, 16))
+
+    def test_render_preserves_snapshot_and_profile_and_hides_private_fields(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        snapshot = self.sample_snapshot()
+        original = deepcopy(snapshot)
+        profile = {
+            "schema_version": 1, "id": "paper", "name": "Synthetic Paper",
+            "layout": "paper", "canvas": [1920, 480], "font_scale": 100, "radius": 8,
+            "colors": {"background": "#F4F1EB", "busy": "#B44949"},
+            "geometry": {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450},
+        }
+        profile_original = deepcopy(profile)
+        changed_private = deepcopy(snapshot)
+        changed_private["agents"][0]["task"] = "another private task title"
+        changed_private["agents"][0]["project"] = "another/private/path"
+        for layout in ("classic", "aurora", "paper"):
+            current_profile = {**profile, "layout": layout, "id": layout}
+            image = render(snapshot, stamp, current_profile, animation_time=0.0)
+            changed_image = render(changed_private, stamp, current_profile, animation_time=0.0)
+            self.assertIsNone(ImageChops.difference(image, changed_image).getbbox())
+        self.assertEqual(snapshot, original)
+        self.assertEqual(profile, profile_original)
+
+    def test_working_spinner_changes_frame_but_not_snapshot(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        agent = self.sample_snapshot()["agents"][0]
+        original = deepcopy(agent)
+        snapshot = {"agents": [agent]}
+        first = render(snapshot, stamp, animation_time=0.0)
+        second = render(snapshot, stamp, animation_time=0.5)
+        self.assertIsNotNone(ImageChops.difference(first, second).getbbox())
+        self.assertEqual(snapshot["agents"][0], original)
+        self.assertTrue(is_animated(agent))
+        self.assertEqual(animation_period(agent), 2.0)
+
+    def test_busy_threshold_is_strict_and_uses_fast_spinner(self):
+        waiting = {"provider": "codex", "state": "waiting", "active_tasks": 3,
+                   "active_tasks_known": True}
+        busy = {**waiting, "active_tasks": 4}
+        self.assertEqual(activity_state(waiting), "idle")
+        self.assertEqual(animation_period(waiting), None)
+        self.assertEqual(activity_state(busy), "busy")
+        self.assertTrue(is_animated(busy))
+        self.assertEqual(animation_period(busy), 0.65)
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        snapshot = {"agents": [busy]}
+        first = render(snapshot, stamp, animation_time=0.0)
+        second = render(snapshot, stamp, animation_time=0.17)
+        self.assertIsNotNone(ImageChops.difference(first, second).getbbox())
+
+        normal_card = render({"agents": [waiting]}, stamp, animation_time=0.0)
+        busy_card = render(snapshot, stamp, animation_time=0.0)
+        busy_red = (0xF0, 0x64, 0x69)
+        normal_badge = normal_card.crop((400, 95, 530, 140))
+        busy_badge = busy_card.crop((400, 95, 530, 140))
+        self.assertNotIn(busy_red, normal_badge.get_flattened_data())
+        self.assertIn(busy_red, busy_badge.get_flattened_data())
+
+    def test_unknown_antigravity_model_count_never_means_busy(self):
+        agent = {
+            "provider": "antigravity", "state": "unknown", "active_tasks": None,
+            "active_tasks_known": False,
+            "subscription": {"quota_windows": [
+                {"known": True, "remaining_percent": 80, "reset_at": "2035-01-06T12:00:00Z"}
+                for _ in range(8)
+            ]},
+        }
+        self.assertEqual(activity_state(agent), "idle")
+        self.assertFalse(is_animated(agent))
+        self.assertIsNone(animation_period(agent))
+
+    def test_antigravity_explicit_known_task_count_can_be_busy(self):
+        agent = {"provider": "antigravity", "state": "waiting", "active_tasks": 4,
+                 "active_tasks_known": True, "subscription": {"quota_windows": [
+                     {"known": True, "remaining_percent": 90 - index,
+                      "reset_at": "2035-01-06T12:00:00Z"}
+                     for index in range(8)
+                 ]}}
+        self.assertEqual(activity_state(agent), "busy")
+        self.assertEqual(animation_period(agent), 0.65)
+
+    def test_antigravity_footer_omits_primary_and_keeps_next_six_models(self):
+        agent = {
+            "provider": "antigravity", "state": "unknown", "active_tasks": None,
+            "active_tasks_known": False,
+            "subscription": {"quota_windows": [
+                {"known": True, "label": f"Synthetic Model {index}", "model": f"model-{index}",
+                 "remaining_percent": 90 - index, "reset_at": "2035-01-06T12:00:00Z"}
+                for index in range(7)
+            ]},
+        }
+        metrics = _agent_metrics(agent, "2035-01-02")
+        self.assertEqual([item["label"] for item in _footer_model_items(metrics)],
+                         [f"Synthetic Model {index}" for index in range(1, 7)])
+        one_model = {**agent, "subscription": {"quota_windows": [agent["subscription"]["quota_windows"][0]]}}
+        self.assertEqual(_footer_model_items(_agent_metrics(one_model, "2035-01-02")), [])
+        empty = {**agent, "subscription": {"quota_windows": []}}
+        self.assertEqual(_footer_model_items(_agent_metrics(empty, "2035-01-02")), [])
+
+    def test_aurora_antigravity_plan_name_spec_and_expiry_survive_model_band(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        snapshot = self.sample_snapshot()
+        profile = {"id": "aurora", "layout": "aurora"}
+        original = render(snapshot, stamp, profile, animation_time=0.0)
+        plan_region = (1140, 220, 1630, 285)
+        base = original.crop(plan_region)
+        for field, value in (("plan_name", "Different synthetic plan"),
+                             ("plan_spec", "Different synthetic tier"),
+                             ("expires_at", "2036-04-05")):
+            changed = deepcopy(snapshot)
+            changed["agents"][2]["subscription"][field] = value
+            image = render(changed, stamp, profile, animation_time=0.0).crop(plan_region)
+            with self.subTest(field=field):
+                self.assertIsNotNone(ImageChops.difference(base, image).getbbox())
+
+    def test_aurora_single_antigravity_model_keeps_its_reset_line(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        profile = {"id": "aurora", "layout": "aurora"}
+        window = {"known": True, "label": "Synthetic Model", "remaining_percent": 88,
+                  "reset_at": "2035-01-06T12:00:00Z"}
+        snapshot = {"agents": [{"provider": "antigravity", "state": "unknown", "active_tasks": None,
+                                "active_tasks_known": False,
+                                "subscription": {"quota_windows": [window]}}]}
+        original = render(snapshot, stamp, profile, animation_time=0.0).crop((52, 285, 530, 330))
+        changed = deepcopy(snapshot)
+        changed["agents"][0]["subscription"]["quota_windows"][0]["reset_at"] = "2035-02-07T12:00:00Z"
+        modified = render(changed, stamp, profile, animation_time=0.0).crop((52, 285, 530, 330))
+        self.assertIsNotNone(ImageChops.difference(original, modified).getbbox())
+
+    def test_unreliable_count_does_not_trigger_busy(self):
+        agent = {"provider": "zcode", "state": "working", "active_tasks": 8,
+                 "active_tasks_known": False}
+        self.assertEqual(activity_state(agent), "working")
+        self.assertEqual(animation_period(agent), 2.0)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,9 +30,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_start": True,
     "lcd_height": 462,
     "codex_no_five_hour_limit": False,
+    "ui_id": "classic",
 }
 
 _ALLOWED_FIELDS = frozenset(DEFAULT_SETTINGS)
+_UI_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 _RUN_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_VALUE_NAME = "KVAgentDesk"
 
@@ -50,6 +53,10 @@ def _validate_setting(name: str, value: Any) -> Any:
     if name in {"usb_enabled", "auto_start", "codex_no_five_hour_limit"}:
         if type(value) is not bool:
             raise ValueError(f"{name} must be a boolean")
+        return value
+    if name == "ui_id":
+        if not isinstance(value, str) or not _UI_ID_PATTERN.fullmatch(value):
+            raise ValueError("ui_id must be a lowercase profile slug")
         return value
     raise ValueError(f"Unknown setting: {name}")
 

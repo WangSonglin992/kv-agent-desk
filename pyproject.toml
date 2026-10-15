@@ -1,6 +1,6 @@
 [project]
 name = "kv-agent-dashboard"
-version = "0.3.1"
+version = "0.4.0"
 description = "Local Windows agent dashboard for Thermalright KV 9.16 USB LCD"
 requires-python = ">=3.12"
 dependencies = ["Pillow>=10.4,<13", "pywebview==6.2.1", "pystray==0.19.5"]
@@ -16,4 +16,4 @@ build-backend = "setuptools.build_meta"
 include = ["agent_dashboard*"]
 
 [tool.setuptools.package-data]
-agent_dashboard = ["assets/app.ico", "assets/deepseek.png", "assets/deepseek.ico", "assets/deepseek.svg", "assets/SOURCES.md"]
+agent_dashboard = ["assets/app.ico", "assets/deepseek.png", "assets/deepseek.ico", "assets/deepseek.svg", "assets/chatgpt.png", "assets/glm.png", "assets/google.png", "assets/SOURCES.md"]

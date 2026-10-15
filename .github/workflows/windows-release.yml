@@ -76,6 +76,9 @@ jobs:
             # Explicit public runtime assets only; never glob the assets directory.
             "--add-data", "agent_dashboard/assets/app.ico;agent_dashboard/assets",
             "--add-data", "agent_dashboard/assets/deepseek.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/chatgpt.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/glm.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/google.png;agent_dashboard/assets",
             "run_dashboard.py"
           )
           python -m PyInstaller @pyinstallerArgs

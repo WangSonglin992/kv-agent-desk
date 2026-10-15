@@ -32,6 +32,8 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | 文件 | 保存内容 |
 | --- | --- |
 | `settings.json` | 显示方向、软件亮度、USB 开关、自启和无 5 小时额度的手动显示偏好。 |
+| `ui-profiles/*.json` | 用户导入且通过校验的界面样式，包含配色、布局、字号等外观参数。 |
+| `last-frame-meta.json` | 最近画面对应的 UI 标识和样式校验摘要，避免恢复不匹配的外观。 |
 | `last-good.json` | 最近可信 Agent 状态、项目标识、任务计数、Token 汇总、订阅额度及其时间戳。 |
 | `accounts-last-good.json` | 两个 DeepSeek 槽位的最近余额、币种、更新时间和状态；不含 API Key。 |
 | `subscriptions.json` | 控制页手动填写的套餐名称、规格与到期日期。 |

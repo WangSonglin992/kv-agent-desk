@@ -23,6 +23,10 @@ KV Agent Desk 本身按仓库根目录的 [MIT License](LICENSE) 发布。第三
 ## 图片与界面参考
 
 - `agent_dashboard/assets/deepseek.svg` 来自 [DeepSeek-LLM 官方仓库](https://github.com/deepseek-ai/DeepSeek-LLM/blob/main/images/logo.svg)；`deepseek.ico` 来自 [DeepSeek 官方网站图标](https://www.deepseek.com/favicon.ico)，`deepseek.png` 从 ICO 原尺寸转换而来。商标归其权利人所有，图片仅用于识别相应账户卡片。
+- `agent_dashboard/assets/chatgpt.png` 取自 [OpenAI Agents SDK 官方仓库中的 logo.svg](https://raw.githubusercontent.com/openai/openai-agents-python/main/docs/assets/logo.svg)，按原白色 Blossom 标识和透明背景栅格化为 256 × 256 PNG；图形与颜色未更改。请参阅 [OpenAI 品牌指南](https://openai.com/brand/)。它仅用于识别 ChatGPT 服务，不是本产品标志，也不表示 OpenAI 与本项目存在关联或背书。
+- `agent_dashboard/assets/glm.png` 取自 [智谱（GLM）官网图标](https://bigmodel.cn/static/images/favicon.png)（[官网](https://bigmodel.cn)），使用 Pillow 转为 RGBA PNG，保留原 90 × 90 尺寸和颜色。
+- `agent_dashboard/assets/google.png` 取自 [Google 官方产品图标 CDN](https://www.gstatic.com/images/branding/product/2x/googleg_48dp.png)，使用 Pillow 转为 RGBA PNG，保留原 96 × 96 尺寸和颜色。
+- 上述商标和标识仍归各自权利人所有，仅用于识别仪表盘中的相应服务；本项目未重新绘制或重新着色这些标识。
 - KV Agent Desk 的 `app.ico` 与托盘图标由本项目绘制。
 - 界面方向参考 [MacTR AI](https://github.com/m1ng-li/mac-thermalright-ai-monitor) 的 LCD Agent 仪表盘。本项目没有复制其源代码或图像资源。
 

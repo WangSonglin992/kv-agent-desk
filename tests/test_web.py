@@ -41,6 +41,7 @@ class WebTests(unittest.TestCase):
             self.assertEqual(json.load(response)["app"], APP_ID)
         with urllib.request.urlopen(self.url + "/frame.png") as response:
             self.assertTrue(response.read().startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertIn("blob:", response.headers["Content-Security-Policy"])
 
     def test_commands_require_token_and_same_origin(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:
@@ -109,6 +110,75 @@ class WebTests(unittest.TestCase):
         self.assertFalse(agent["subscription"]["five_hour"]["known"])
         self.post("/api/settings", {"codex_no_five_hour_limit": False}, self.dashboard.token).close()
         self.assertFalse(self.dashboard.present_agent(agent)["subscription"]["five_hour"]["known"])
+
+    def test_ui_catalogue_and_synthetic_preview_are_available(self):
+        with urllib.request.urlopen(self.url + "/api/ui") as response:
+            ui = json.load(response)
+        self.assertEqual(ui["active_id"], "classic")
+        self.assertEqual({p["id"] for p in ui["profiles"]}, {"classic", "aurora", "paper"})
+        with urllib.request.urlopen(self.url + "/api/ui/preview?id=paper") as response:
+            self.assertTrue(response.read().startswith(b"\x89PNG\r\n\x1a\n"))
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(self.url + "/api/ui/export?id=missing")
+
+    def test_ui_switch_renders_immediately_without_provider_collection_and_survives_restart(self):
+        before = self.dashboard.png
+        with patch.object(self.dashboard, "collect", side_effect=AssertionError("must not poll")):
+            self.post("/api/settings", {"ui_id": "paper"}, self.dashboard.token).close()
+        self.assertEqual(self.dashboard.ui_id, "paper")
+        self.assertNotEqual(before, self.dashboard.png)
+        restored = Dashboard(self.dashboard.args)
+        self.assertEqual(restored.ui_id, "paper")
+        self.assertTrue((Path(self.folder.name) / "last-frame-meta.json").is_file())
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/settings", {"ui_id": "not_installed"}, self.dashboard.token)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(self.dashboard.ui_id, "paper")
+
+    def test_ui_import_requires_existing_control_security(self):
+        profile = self.dashboard.ui_profiles.export("paper")
+        profile.update(id="custom_paper", name="Synthetic custom")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/ui/import", {"profile": profile})
+        self.assertEqual(caught.exception.code, 403)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/ui/import", {"profile": profile}, self.dashboard.token, "https://example.invalid")
+        self.assertEqual(caught.exception.code, 403)
+        self.assertFalse(self.dashboard.ui_profiles.contains("custom_paper"))
+
+    def test_custom_ui_import_export_and_restart_never_include_account_data(self):
+        profile = self.dashboard.ui_profiles.export("paper")
+        profile.update(id="custom_paper", name="Synthetic custom")
+        profile["colors"]["codex"] = "#176D9A"
+        self.dashboard.profiles.update("codex", {"plan_name": "private account label"})
+        with patch.object(self.dashboard, "collect", side_effect=AssertionError("must not poll")):
+            with self.post("/api/ui/import", {"profile": profile}, self.dashboard.token) as response:
+                self.assertEqual(json.load(response)["ui"]["active_id"], "custom_paper")
+        with urllib.request.urlopen(self.url + "/api/ui/export") as response:
+            self.assertIn("custom_paper.kvui.json", response.headers["Content-Disposition"])
+            exported = response.read()
+        self.assertNotIn(b"private account label", exported)
+        self.assertNotIn(b"tokens", exported)
+        self.assertNotIn(b"api_key", exported)
+        self.assertEqual(json.loads(exported)["id"], "custom_paper")
+        self.assertEqual(Dashboard(self.dashboard.args).ui_id, "custom_paper")
+
+    def test_invalid_ui_import_preserves_current_selection_and_rejects_large_payload(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/ui/import", {"profile": {"schema_version": 1, "id": "bad", "name": "bad",
+                                                     "layout": "paper", "script": "forbidden"}}, self.dashboard.token)
+        self.assertEqual(caught.exception.code, 400)
+        self.assertEqual(self.dashboard.ui_id, "classic")
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/ui/import", {"profile": {"name": "x" * 75000}}, self.dashboard.token)
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_asset_route_is_an_exact_allowlist(self):
+        for name in ("chatgpt.png", "glm.png", "google.png"):
+            with urllib.request.urlopen(self.url + "/assets/" + name) as response:
+                self.assertEqual(response.headers["Content-Type"], "image/png")
+        with self.assertRaises(urllib.error.HTTPError):
+            urllib.request.urlopen(self.url + "/assets/../settings.py")
 
 
 if __name__ == "__main__":

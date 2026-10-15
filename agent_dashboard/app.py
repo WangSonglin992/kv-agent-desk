@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from datetime import datetime
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -20,20 +21,52 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
 from PIL import Image, ImageEnhance
 from . import __version__
 
-from .render import render
+from .render import is_animated, render
 from .retention import LastGoodStore
 from .subscriptions import SubscriptionProfiles
 from .accounts.monitor import AccountMonitor
 from .settings import AppSettings, get_autostart, set_autostart
 from .web import PAGE
+from .ui_profiles import UIProfiles
 
 APP_ID = "kv-agent-desk"
 PROVIDERS = (("codex", "Codex"), ("zcode", "ZCode"), ("antigravity", "Antigravity"))
+ASSET_FILES = {name: Path(__file__).with_name("assets") / name for name in
+               ("chatgpt.png", "glm.png", "google.png", "deepseek.png", "app.ico")}
+
+
+def ui_demo_snapshot() -> dict:
+    """Synthetic style previews; never use current account/profile values."""
+    stamp = "2035-06-12T14:30:00+08:00"
+    reset = "2035-06-15T10:00:00+08:00"
+    agents = []
+    for provider, name, tasks, total, remaining in (("codex", "Codex", 2, 123456, 72),
+                                                   ("zcode", "ZCode", 4, 65432, 58),
+                                                   ("antigravity", "Antigravity", None, None, None)):
+        row = empty_agent(provider, name)
+        row.update(available=True, state="working" if tasks else "unknown", active_tasks=tasks,
+                   state_label="工作中" if tasks else "状态未知", updated_at=stamp,
+                   tokens={"known": total is not None, "total": total, "input": 60000,
+                           "output": 5432, "cached": 30000, "scope": "today"})
+        quota = {"name": name, "plan_name": "示例套餐", "plan_spec": "演示规格", "expires_at": "2035-12-31",
+                 "five_hour": {"known": True, "remaining_percent": 85, "reset_at": reset},
+                 "weekly": {"known": True, "remaining_percent": remaining, "reset_at": reset}}
+        if provider == "antigravity":
+            quota["quota_windows"] = [{"model": f"demo-{i}", "label": f"Demo Model {chr(65+i)}",
+                                       "known": True, "remaining_percent": percent, "reset_at": reset}
+                                      for i, percent in enumerate((80, 64, 91))]
+        row["subscription"] = quota
+        agents.append(row)
+    accounts = [{"id": key, "name": "Demo", "brand": "deepseek", "kind": "balance",
+                 "known": True, "value": value, "currency": "CNY"}
+                for key, value in (("deepseek_lab", "123.45"), ("deepseek_personal", "67.89"))]
+    return {"demo": True, "agents": agents, "accounts": accounts, "display": {"connected": False}}
 
 
 def display_data(agent: dict) -> dict:
@@ -90,11 +123,17 @@ class Dashboard:
         self.args = args
         self.lock = threading.Lock()
         self.settings_lock = threading.RLock()
+        self.render_lock = threading.RLock()
         self.stop = threading.Event()
         self.show_requested = threading.Event()
         self.desktop_mode = False
         self.settings = AppSettings(None if args.demo else args.state_dir / "settings.json")
         prefs = self.settings.get()
+        self.ui_profiles = UIProfiles(None if args.demo else args.state_dir / "ui-profiles")
+        if not self.ui_profiles.contains(prefs["ui_id"]):
+            prefs = self.settings.update({"ui_id": "classic"})
+        self.ui_id = prefs["ui_id"]
+        self.ui_preview_cache: dict[str, bytes] = {}
         overrides = {key: getattr(args, key) for key in ("rotation", "lcd_height") if getattr(args, key, None) is not None}
         if overrides:
             prefs = self.settings.update(overrides)
@@ -124,7 +163,7 @@ class Dashboard:
                          "accounts": self.accounts.snapshot(),
                          "display": self.display_status, "usb_enabled": self.usb_enabled,
                          "updated_at": datetime.now().astimezone().isoformat()}
-        self.png = self.encode(self.dim(render(self.snapshot)), "PNG")
+        self.png = self.encode(self.dim(render(self.snapshot, profile=self.current_profile(), animation_time=0)), "PNG")
 
     @staticmethod
     def encode(image: Image.Image, kind: str, **options) -> bytes:
@@ -156,6 +195,8 @@ class Dashboard:
         if not isinstance(fields, dict):
             raise ValueError("设置格式不正确")
         with self.settings_lock:
+            if "ui_id" in fields and (not isinstance(fields["ui_id"], str) or not self.ui_profiles.contains(fields["ui_id"])):
+                raise ValueError("请选择已安装的 UI")
             previous = self.settings.get()
             if "auto_start" in fields:
                 if type(fields["auto_start"]) is not bool:
@@ -172,8 +213,45 @@ class Dashboard:
                 self.rotation = prefs["rotation"]
                 self.lcd_height = prefs["lcd_height"]
                 self.brightness = prefs["brightness"]
+                self.ui_id = prefs["ui_id"]
                 self.snapshot["usb_enabled"] = self.usb_enabled
+            if "ui_id" in fields:
+                with self.lock:
+                    agents = deepcopy(self.latest_agents)
+                self.tick(agents)
+                self.persist_frame(force=True)
             return prefs
+
+    def current_profile(self) -> dict:
+        return self.ui_profiles.get(self.ui_id)
+
+    @staticmethod
+    def profile_hash(profile: dict) -> str:
+        return hashlib.sha256(json.dumps(profile, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    def ui_catalogue(self) -> dict:
+        return {"active_id": self.current_profile()["id"], "profiles": self.ui_profiles.list(),
+                "max_import_bytes": 65536}
+
+    def ui_preview(self, ui_id: str) -> bytes:
+        if not self.ui_profiles.contains(ui_id):
+            raise ValueError("未找到此 UI")
+        profile = self.ui_profiles.get(ui_id)
+        key = self.profile_hash(profile)
+        with self.render_lock:
+            if key not in self.ui_preview_cache:
+                image = render(ui_demo_snapshot(), now=datetime.fromisoformat("2035-06-12T14:30:00+08:00"),
+                               profile=profile, animation_time=.25)
+                self.ui_preview_cache[key] = self.encode(image, "PNG")
+            return self.ui_preview_cache[key]
+
+    def import_ui(self, value: dict) -> dict:
+        with self.settings_lock:
+            profile = self.ui_profiles.import_profile(value)
+            with self.render_lock:
+                self.ui_preview_cache.clear()
+            self.update_settings({"ui_id": profile["id"]})
+            return self.ui_catalogue()
 
     def toggle_usb(self) -> bool:
         self.update_settings({"usb_enabled": not self.usb_enabled})
@@ -254,21 +332,31 @@ class Dashboard:
 
     def tick(self, agents: list[dict] | None = None) -> None:
         agents = self.collect() if agents is None else agents
+        with self.render_lock:
+            self._render_frame(agents)
+
+    def _render_frame(self, agents: list[dict]) -> None:
         agents = [self.present_agent(agent) for agent in agents]
         state = {"app": APP_ID, "version": __version__, "agents": agents, "demo": self.args.demo,
                  "accounts": self.accounts.snapshot(),
                  "display": deepcopy(self.display_status), "usb_enabled": self.usb_enabled,
                  "updated_at": datetime.now().astimezone().isoformat()}
-        image = render(state)
+        profile = self.current_profile()
+        state["ui_id"] = profile["id"]
+        image = render(state, profile=profile, animation_time=time.monotonic())
         self.send(image)
         state["display"] = deepcopy(self.display_status)
-        image = render(state)
         self._last_raw_frame = image
+        self._last_frame_profile = {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
         with self.lock:
             self.snapshot, self.png = state, self.encode(self.dim(image), "PNG")
         self.persist_frame()
 
     def persist_frame(self, force: bool = False) -> None:
+        with self.render_lock:
+            self._persist_frame(force)
+
+    def _persist_frame(self, force: bool = False) -> None:
         if self.args.demo or self._last_raw_frame is None or (not force and time.monotonic() - self._last_frame_write < 30):
             return
         try:
@@ -277,6 +365,10 @@ class Dashboard:
             temporary = path.with_suffix(".tmp")
             temporary.write_bytes(self.encode(self._last_raw_frame, "PNG"))
             os.replace(temporary, path)
+            metadata = self.args.state_dir / "last-frame-meta.json"
+            temporary_meta = metadata.with_suffix(".tmp")
+            temporary_meta.write_text(json.dumps(self._last_frame_profile), encoding="utf-8")
+            os.replace(temporary_meta, metadata)
             self._last_frame_write = time.monotonic()
         except OSError:
             logging.warning("Could not persist display frame", exc_info=True)
@@ -284,7 +376,16 @@ class Dashboard:
     def restore_frame(self) -> None:
         image = None
         path = self.args.state_dir / "last-frame.png"
-        if not self.args.demo and path.is_file():
+        profile = self.current_profile()
+        metadata = self.args.state_dir / "last-frame-meta.json"
+        matching_profile = profile["id"] == "classic"
+        if metadata.is_file():
+            try:
+                saved_metadata = json.loads(metadata.read_text(encoding="utf-8"))
+                matching_profile = saved_metadata == {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
+            except (OSError, ValueError, TypeError):
+                matching_profile = False
+        if not self.args.demo and path.is_file() and matching_profile:
             try:
                 with Image.open(path) as saved:
                     if saved.size == (1920, 480):
@@ -292,8 +393,9 @@ class Dashboard:
             except (OSError, ValueError):
                 pass
         if image is None:
-            image = render(self.snapshot)
+            image = render(self.snapshot, profile=profile, animation_time=0)
         self._last_raw_frame = image
+        self._last_frame_profile = {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
         self.send(image)
         with self.lock:
             self.png = self.encode(self.dim(image), "PNG")
@@ -326,7 +428,9 @@ class Dashboard:
                 with self.lock:
                     agents = deepcopy(self.latest_agents)
                 self.tick(agents)
-                self.stop.wait(max(.05, 1.0 - (time.monotonic() - started)))
+                animated = any(is_animated(agent) for agent in agents)
+                cadence = .10 if animated else 1.0
+                self.stop.wait(max(.02, cadence - (time.monotonic() - started)))
         except Exception:
             logging.exception("Dashboard worker failed")
             self.stop.set()
@@ -350,14 +454,16 @@ def handler(dashboard: Dashboard):
         def log_message(self, format, *args):
             pass
 
-        def send_data(self, status: int, kind: str, content: bytes) -> None:
+        def send_data(self, status: int, kind: str, content: bytes, headers: dict | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(content)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(content)
 
@@ -379,8 +485,31 @@ def handler(dashboard: Dashboard):
                 state["settings"] = dashboard.settings.get()
                 state["auto_start_registered"] = get_autostart()
                 state["restored_before_refresh"] = dashboard.restored_before_refresh
+                state["ui"] = dashboard.ui_catalogue()
                 data = json.dumps(state, ensure_ascii=False).encode("utf-8")
                 self.send_data(200, "application/json; charset=utf-8", data)
+            elif path == "/api/ui":
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps(dashboard.ui_catalogue(), ensure_ascii=False).encode("utf-8"))
+            elif path in {"/api/ui/export", "/api/ui/preview"}:
+                ui_id = parse_qs(urlsplit(self.path).query).get("id", [dashboard.ui_id])[0]
+                if not dashboard.ui_profiles.contains(ui_id):
+                    self.send_data(404, "text/plain", b"UI not found")
+                    return
+                if path.endswith("preview"):
+                    self.send_data(200, "image/png", dashboard.ui_preview(ui_id))
+                else:
+                    body = json.dumps(dashboard.ui_profiles.export(ui_id), ensure_ascii=False, indent=2).encode("utf-8")
+                    self.send_data(200, "application/json; charset=utf-8", body,
+                                   {"Content-Disposition": f'attachment; filename="{ui_id}.kvui.json"'})
+            elif path.startswith("/assets/") and path[8:] in ASSET_FILES:
+                name = path[8:]
+                try:
+                    body = ASSET_FILES[name].read_bytes()
+                except OSError:
+                    self.send_data(404, "text/plain", b"Asset not found")
+                    return
+                self.send_data(200, "image/x-icon" if name.endswith(".ico") else "image/png", body)
             elif path == "/frame.png":
                 with dashboard.lock:
                     data = dashboard.png
@@ -397,7 +526,8 @@ def handler(dashboard: Dashboard):
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if length < 0 or length > 4096:
+                limit = 65536 + 4096 if self.path == "/api/ui/import" else 4096
+                if length < 0 or length > limit:
                     raise ValueError("Body too large")
                 data = json.loads(self.rfile.read(length) or b"{}")
             except (ValueError, TypeError):
@@ -423,6 +553,21 @@ def handler(dashboard: Dashboard):
                     self.send_data(500, "application/json; charset=utf-8", json.dumps({"error": "设置保存失败，请检查当前用户权限"}, ensure_ascii=False).encode("utf-8"))
                     return
                 self.send_data(200, "application/json", json.dumps({"ok": True, "settings": prefs}).encode("utf-8"))
+            elif self.path == "/api/ui/import" and isinstance(data, dict):
+                try:
+                    if set(data) != {"profile"}:
+                        raise ValueError("请导入一个 UI JSON 模板")
+                    catalogue = dashboard.import_ui(data["profile"])
+                except ValueError as exc:
+                    self.send_data(400, "application/json; charset=utf-8",
+                                   json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8"))
+                    return
+                except OSError:
+                    self.send_data(500, "application/json; charset=utf-8",
+                                   json.dumps({"error": "UI 保存失败，请检查本机配置目录"}, ensure_ascii=False).encode("utf-8"))
+                    return
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps({"ok": True, "ui": catalogue}, ensure_ascii=False).encode("utf-8"))
             elif self.path == "/api/show":
                 from .desktop import request_show
                 shown = request_show()
