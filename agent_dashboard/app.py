@@ -18,6 +18,7 @@ import re
 import secrets
 import signal
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -133,6 +134,7 @@ class Dashboard:
         self.stop = threading.Event()
         self.show_requested = threading.Event()
         self.desktop_mode = False
+        self.updates = None
         self.settings = AppSettings(None if args.demo else args.state_dir / "settings.json")
         prefs = self.settings.get()
         self.ui_profiles = UIProfiles(None if args.demo else args.state_dir / "ui-profiles")
@@ -230,6 +232,42 @@ class Dashboard:
 
     def current_profile(self) -> dict:
         return self.ui_profiles.get(self.ui_id)
+
+    def configure_updates(self) -> None:
+        if not _default_native_install_mode(self.args):
+            return
+        from .installation import is_installed
+        if not is_installed(Path(sys.executable)):
+            return
+        from .updates import UpdateManager
+        self.updates = UpdateManager(
+            self.args.state_dir, __version__,
+            enabled=lambda: self.settings.get()["auto_update"],
+            on_update_ready=self._apply_update, supported=True)
+
+    def update_status(self) -> dict:
+        if self.updates is not None:
+            return self.updates.status()
+        return {"supported": False, "checking": False, "state": "unsupported",
+                "message": "此运行模式不支持自动更新检查", "current_version": __version__,
+                "available_version": None, "last_checked": None}
+
+    def request_update_check(self) -> dict:
+        if self.updates is None:
+            raise ValueError("此运行模式不支持自动更新检查")
+        self.updates.check_now()
+        return self.update_status()
+
+    def _apply_update(self, candidate: Path) -> None:
+        candidate = Path(candidate)
+        if not candidate.is_file() or candidate.name != "KV-Agent-Desk.exe":
+            raise ValueError("更新程序不可用")
+        self.persist_frame(force=True)
+        subprocess.Popen([str(candidate), "--install", "--background"],
+                         cwd=str(candidate.parent),
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        # The installer stops this process only after its backup and staging
+        # have succeeded. A child-process start alone is not an install ack.
 
     @staticmethod
     def profile_hash(profile: dict) -> str:
@@ -496,6 +534,8 @@ class Dashboard:
     def run(self) -> None:
         try:
             self.restore_frame()
+            if self.updates is not None:
+                self.updates.start()
             updater = threading.Thread(target=self.update_loop, daemon=True, name="agent-data-updates")
             updater.start()
             while not self.stop.is_set():
@@ -510,6 +550,8 @@ class Dashboard:
             logging.exception("Dashboard worker failed")
             self.stop.set()
         finally:
+            if self.updates is not None:
+                self.updates.close()
             self.persist_frame(force=True)
             if self.device:
                 self.device.close()
@@ -561,6 +603,7 @@ def handler(dashboard: Dashboard):
                 state["auto_start_registered"] = get_autostart()
                 state["restored_before_refresh"] = dashboard.restored_before_refresh
                 state["ui"] = dashboard.ui_catalogue()
+                state["updates"] = dashboard.update_status()
                 data = json.dumps(state, ensure_ascii=False).encode("utf-8")
                 self.send_data(200, "application/json; charset=utf-8", data)
             elif path == "/api/ui":
@@ -660,6 +703,17 @@ def handler(dashboard: Dashboard):
                     return
                 self.send_data(200, "application/json; charset=utf-8",
                                json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            elif self.path == "/api/updates/check" and isinstance(data, dict):
+                try:
+                    if data:
+                        raise ValueError("更新检查不接受下载地址或其他参数")
+                    status = dashboard.request_update_check()
+                except ValueError as exc:
+                    self.send_data(400, "application/json; charset=utf-8",
+                                   json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8"))
+                    return
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps({"ok": True, "updates": status}, ensure_ascii=False).encode("utf-8"))
             elif self.path == "/api/show":
                 from .desktop import request_show
                 shown = request_show()
@@ -693,6 +747,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--preview-only", action="store_true", help="Do not open/write the USB display")
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--background", action="store_true", help="Run the desktop app in the system tray")
+    p.add_argument("--install", action="store_true", help="Install or update the Windows app and desktop shortcut")
+    p.add_argument("--portable", action="store_true", help="Run without installation or automatic program updates")
     p.add_argument("--browser-only", action="store_true", help="Use an external browser instead of the native window")
     p.add_argument("--demo", action="store_true", help="Explicitly labelled demo; USB output is disabled")
     p.add_argument("--once", action="store_true", help="Collect/render once, save frame.png/state.json and exit")
@@ -733,6 +789,33 @@ def existing_server(url: str, stop: bool = False, show: bool = False) -> bool:
         return False
 
 
+def _default_native_install_mode(args: argparse.Namespace) -> bool:
+    native = (not args.no_browser or args.background) and not args.browser_only
+    return bool(sys.platform == "win32" and getattr(sys, "frozen", False) and native
+                and not any((args.demo, args.once, args.stop, args.preview_only, args.portable))
+                and args.port == 8765 and args.state_dir.resolve() == state_directory().resolve())
+
+
+def _prepare_installed_launch(args: argparse.Namespace) -> bool:
+    """Return True when this invocation handed off to the fixed installed EXE."""
+    if args.install and (sys.platform != "win32" or not getattr(sys, "frozen", False)):
+        raise ValueError("安装功能仅适用于打包后的 Windows 应用")
+    if args.install and (args.port != 8765 or args.state_dir.resolve() != state_directory().resolve()):
+        raise ValueError("自动安装使用默认数据目录；自定义数据目录请使用便携模式")
+    if not args.install and not _default_native_install_mode(args):
+        return False
+    from .installation import ensure_desktop_shortcut, install_current, is_installed
+    executable = Path(sys.executable)
+    if args.install or not is_installed(executable):
+        install_current(executable, state_dir=args.state_dir, background=args.background)
+        return True
+    try:
+        ensure_desktop_shortcut(executable)
+    except (OSError, RuntimeError):
+        logging.warning("Could not refresh desktop shortcut")
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if not 1 <= args.port <= 65535 or args.interval < .5 or args.stale_seconds < 0:
@@ -740,6 +823,15 @@ def main(argv: list[str] | None = None) -> int:
     url = f"http://127.0.0.1:{args.port}"
     if args.stop:
         return 0 if existing_server(url, True) else 1
+    try:
+        if _prepare_installed_launch(args):
+            return 0
+    except Exception as exc:
+        logging.error("Installation could not complete: %s", type(exc).__name__)
+        if os.name == "nt" and not args.background:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, "安装或更新未完成。原有布局与订阅资料仍保留，请稍后重试。", "KV Agent Desk", 0x10)
+        return 1
     args.state_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         handlers=[RotatingFileHandler(args.state_dir / "dashboard.log", maxBytes=1_000_000,
@@ -770,6 +862,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     server.daemon_threads = True
     server.timeout = .5
+    native = (not args.no_browser or args.background) and not args.browser_only
+    dashboard.desktop_mode = native
+    dashboard.configure_updates()
     # Publish the control page first so expensive first-day indexing doesn't block preview.
     def worker():
         try:
@@ -788,8 +883,6 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError):
             if not dashboard.stop.is_set():
                 raise
-    native = (not args.no_browser or args.background) and not args.browser_only
-    dashboard.desktop_mode = native
     http_thread = None
     try:
         if native:
@@ -800,7 +893,7 @@ def main(argv: list[str] | None = None) -> int:
                         dashboard.show_requested.clear()
                     dashboard.stop.wait(.1)
             threading.Thread(target=show_pending, daemon=True, name="desktop-show-requests").start()
-            if not args.demo:
+            if not args.demo and not args.portable:
                 try:
                     set_autostart(dashboard.settings.get()["auto_start"], startup_command())
                 except (OSError, NotImplementedError, ValueError):

@@ -1,6 +1,10 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%LOCALAPPDATA%\Programs\KV-Agent-Desk\KV-Agent-Desk.exe" (
+  start "" "%LOCALAPPDATA%\Programs\KV-Agent-Desk\KV-Agent-Desk.exe" %*
+  exit /b 0
+)
 if exist "%~dp0dist\KV-Agent-Desk.exe" (
   start "" "%~dp0dist\KV-Agent-Desk.exe" %*
   exit /b 0

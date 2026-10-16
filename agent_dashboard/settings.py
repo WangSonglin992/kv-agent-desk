@@ -28,6 +28,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rotation": 180,
     "usb_enabled": True,
     "auto_start": True,
+    "auto_update": True,
     "lcd_height": 462,
     "codex_no_five_hour_limit": False,
     "ui_id": "classic",
@@ -50,7 +51,7 @@ def _validate_setting(name: str, value: Any) -> Any:
         if name == "lcd_height" and value not in (462, 480):
             raise ValueError("lcd_height must be 462 or 480")
         return value
-    if name in {"usb_enabled", "auto_start", "codex_no_five_hour_limit"}:
+    if name in {"usb_enabled", "auto_start", "auto_update", "codex_no_five_hour_limit"}:
         if type(value) is not bool:
             raise ValueError(f"{name} must be a boolean")
         return value

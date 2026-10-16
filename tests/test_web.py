@@ -7,7 +7,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from agent_dashboard.app import Dashboard, LoopbackServer, handler, APP_ID, existing_server
 import agent_dashboard.render as render_module
@@ -44,6 +44,27 @@ class WebTests(unittest.TestCase):
         with urllib.request.urlopen(self.url + "/frame.png") as response:
             self.assertTrue(response.read().startswith(b"\x89PNG\r\n\x1a\n"))
             self.assertIn("blob:", response.headers["Content-Security-Policy"])
+
+    def test_update_endpoint_is_protected_and_only_uses_fixed_release_source(self):
+        with urllib.request.urlopen(self.url + "/api/state") as response:
+            self.assertFalse(json.load(response)["updates"]["supported"])
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("/api/updates/check", {})
+        self.assertEqual(error.exception.code, 403)
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("/api/updates/check", {}, self.dashboard.token)
+        self.assertEqual(error.exception.code, 400)
+        manager = MagicMock()
+        manager.status.return_value = {"supported": True, "checking": True, "state": "checking"}
+        self.dashboard.updates = manager
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            self.post("/api/updates/check", {"url": "https://example.invalid/app.exe"}, self.dashboard.token)
+        self.assertEqual(error.exception.code, 400)
+        manager.check_now.assert_not_called()
+        self.dashboard.settings.update({"auto_update": False})
+        with self.post("/api/updates/check", {}, self.dashboard.token) as response:
+            self.assertTrue(json.load(response)["ok"])
+        manager.check_now.assert_called_once_with()
 
     def test_commands_require_token_and_same_origin(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:

@@ -22,6 +22,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 - DeepSeek 余额请求只到官方 HTTPS API，至少间隔 60 秒；每次请求都是只读 GET。
 - Antigravity 的任务状态、`includeMessages=false` Generator Metadata 与额度请求发往正在运行的本机 language server，分别约每 2 秒、15 秒和 60 秒读取。本地 usage 只读取 input/output/cache 数值；显示总数为输入加输出，缓存计数单独呈现、不重复相加。客户端可能依照其自身行为与 Google 服务通信；本应用不会为 Antigravity 登录账号或发送模型推理请求。
 - 本机控制页通过回环接口提供服务，不向局域网监听，也不会将状态同步到云端。
+- 已安装版本默认后台读取本仓库的 GitHub 稳定 Release 公共更新清单；清单不存在时才查询 GitHub 公开 API。下载仅允许 GitHub 及指定官方资产域名，文件通过 SHA-256 校验后才安装。请求不使用 GitHub 登录或 API Key，不上传设置、订阅或布局；正常自动检查间隔为 24 小时，失败时退避。
 
 请求失败、来源数据缺失或时间过久时，应用优先保留最后成功读取的值，并附加“数据待检查更新”提示。未知值不会填成 0% 或 100%。默认过期提示时间为 300 秒；额度接口自身有更长刷新间隔。
 
@@ -39,6 +40,11 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | `subscriptions.json` | 控制页手动填写的套餐名称、规格与到期日期。 |
 | `last-frame.png` | 最近显示的完整仪表盘画面，约每 30 秒更新一次并在退出时保存。 |
 | `dashboard.log` | 轮转日志，用于本机故障诊断。 |
+| `updates.json` | 程序版本、更新检查时间和状态；不包含下载重定向的临时签名 URL、账号或凭据。 |
+| `updates/<版本>/KV-Agent-Desk.exe` | 校验通过的更新程序。 |
+| `backups/install-*` | 安装或更新前原样备份的设置、订阅和自定义布局；仍只在本机保存。 |
+
+程序安装目录为 `%LOCALAPPDATA%\Programs\KV-Agent-Desk`。更新只替换这个目录中的 EXE，并修复桌面快捷方式，不清空上述数据目录。
 
 开机恢复功能会先显示 `last-frame.png`，再开始刷新数据。注意，截图本身可能包含账户余额和用量；分享截图、缓存或日志前请先检查其内容。删除这些文件即可清除对应的本地状态；删除 `settings.json` 会恢复默认设置。
 
@@ -47,6 +53,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 ## 用户可控制的选项
 
 - 关闭控制页中的“开机自启并恢复上次画面”，会移除应用自己的当前用户启动项。
+- 关闭“自动检查并安装更新”可停止后续的自动检查；“检查并更新”仍可由用户手动触发。退出应用会取消尚未完成的检查或下载。
 - 暂停 USB 输出或退出应用可释放屏幕，方便临时使用 Thermalright TRCC。
 - 在控制页清除套餐资料，可移除手动填写的套餐名称、规格与到期日期。
 - 取消“ChatGPT 无5小时限额”可恢复读取实际观测额度；默认不勾选。

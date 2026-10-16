@@ -68,15 +68,41 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(changed["brightness"], 73)
         self.assertEqual(changed["lcd_height"], 480)
         self.assertEqual(settings.get()["rotation"], 180)
+        self.assertTrue(settings.get()["auto_update"])
 
     def test_json_round_trip_contains_only_settings(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "nested" / "settings.json"
             settings = AppSettings(path)
-            saved = settings.update({"auto_start": False, "usb_enabled": False, "ui_id": "paper"})
+            saved = settings.update({"auto_start": False, "auto_update": False,
+                                     "usb_enabled": False, "ui_id": "paper"})
             self.assertEqual(AppSettings(path).get(), saved)
             self.assertEqual(saved["ui_id"], "paper")
+            self.assertFalse(saved["auto_update"])
             self.assertEqual(set(json.loads(path.read_text(encoding="utf-8"))), set(DEFAULT_SETTINGS))
+
+    def test_legacy_settings_default_auto_update_on_and_preserve_existing_values(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text(json.dumps({"brightness": 47, "rotation": 0,
+                                        "usb_enabled": False, "auto_start": False,
+                                        "ui_id": "paper", "legacy_unknown": "ignored"}),
+                            encoding="utf-8")
+            settings = AppSettings(path)
+            loaded = settings.get()
+            self.assertTrue(loaded["auto_update"])
+            self.assertEqual(loaded["brightness"], 47)
+            self.assertEqual(loaded["rotation"], 0)
+            self.assertFalse(loaded["usb_enabled"])
+            self.assertFalse(loaded["auto_start"])
+            self.assertEqual(loaded["ui_id"], "paper")
+            self.assertNotIn("legacy_unknown", loaded)
+
+            disabled = settings.update({"auto_update": False})
+            self.assertFalse(disabled["auto_update"])
+            for name in ("brightness", "rotation", "usb_enabled", "auto_start", "ui_id"):
+                self.assertEqual(disabled[name], loaded[name])
+            self.assertEqual(AppSettings(path).get(), disabled)
 
     def test_invalid_updates_raise_without_changing_saved_data(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -87,6 +113,7 @@ class AppSettingsTests(unittest.TestCase):
             invalid = [
                 {"brightness": -1}, {"brightness": 101}, {"brightness": True},
                 {"rotation": 90}, {"usb_enabled": 1}, {"auto_start": "yes"},
+                {"auto_update": 1}, {"auto_update": "yes"},
                 {"lcd_height": 463}, {"ui_id": "../theme"}, {"ui_id": 1}, {"other": 1},
             ]
             for fields in invalid:

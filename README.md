@@ -16,6 +16,7 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 - **手动套餐资料**：Codex、ZCode、Antigravity 均可手动补充套餐名称、规格和到期日期；手动填写优先显示，清空后恢复自动信息。
 - **保留最后可信数据**：来源暂不可读或数据过期时继续展示最后值，并用低调提示标记“数据待检查更新”；开机时先恢复上次屏幕画面，再更新来源数据。
 - **可视布局编辑**：点击预览选择元素，Ctrl 多选后可拖动、用方向键微调或输入 X/Y；支持对齐、等距分布和独立文字样式，字体来自本机字体库。草稿保存并应用后才更新屏幕；套餐、状态和额度仍由各自数据模块控制。详见 [布局与模板说明](docs/UI-TEMPLATES.md)。
+- **安装与自动更新**：Windows 发布版默认安装到固定的当前用户应用目录，创建并修复桌面快捷方式；后台检查稳定版本并校验更新文件。更新前备份本机设置、订阅和自定义布局，更新时只替换程序。
 
 
 ## 运行要求
@@ -31,7 +32,13 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 
 ### Windows 发布版
 
-从 [GitHub Releases](https://github.com/WangSonglin992/kv-agent-desk/releases) 下载 `KV-Agent-Desk-windows-x64.zip`，解压后运行 `KV-Agent-Desk.exe`，无需安装 Python。便携包附带公开说明与依赖许可，下载页同时提供 SHA-256 校验文件；校验方式见 [发布说明](docs/RELEASING.md)。首次启动的默认行为是启用 USB 输出并登记当前 Windows 用户的开机自启；可在控制页取消“开机自启并恢复上次画面”。
+从 [GitHub Releases](https://github.com/WangSonglin992/kv-agent-desk/releases) 下载 `KV-Agent-Desk-windows-x64.zip`，解压后运行 `KV-Agent-Desk.exe`，无需安装 Python 或管理员权限。程序会安装到 `%LOCALAPPDATA%\Programs\KV-Agent-Desk\KV-Agent-Desk.exe`，并创建桌面的 **KV Agent Desk** 快捷方式；以后从这个固定入口打开。
+
+用户数据仍保存在 `%LOCALAPPDATA%\KV-Agent-Desk`，与程序目录分开。安装和更新前会把 `settings.json`、`subscriptions.json` 及 `ui-profiles/*.json` 的原始文件备份到数据目录下的 `backups/install-*`；不会将内置样式覆盖到自定义副本。
+
+已安装版本在启动后后台检查更新，正常间隔为 24 小时，失败时退避重试；可关闭“自动检查并安装更新”，也可主动点击“检查并更新”。更新清单和文件来自本仓库的稳定 Release，EXE 通过 SHA-256 校验后才交接安装，不使用账号登录或 API Key。更新会短暂重启应用，然后恢复上次画面和设置。
+
+需要便携运行时使用 `KV-Agent-Desk.exe --portable`；演示、源码和自定义端口运行不自动安装或更新程序。发布 ZIP 附带公开说明与依赖许可，下载页提供 SHA-256 校验文件。首次正常启动默认启用 USB 输出并登记当前 Windows 用户的开机自启；可在控制页取消“开机自启并恢复上次画面”。
 
 ### 从源码构建
 

@@ -27,6 +27,8 @@ last-good.json
 accounts-last-good.json
 last-frame.png
 last-frame-meta.json
+updates.json
+updates/
 ui-profiles/
 # Local development notes can contain real account information.
 PLAN.md
