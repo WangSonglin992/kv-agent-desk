@@ -1,4 +1,4 @@
-"""Read Antigravity quota data from its already-running local language server."""
+"""Read Antigravity activity and quotas from its running local language server."""
 
 from __future__ import annotations
 
@@ -17,9 +17,14 @@ from typing import Any
 
 
 _MIN_REFRESH_SECONDS = 60.0
+_ACTIVITY_REFRESH_SECONDS = 2.0
+_RUNTIME_REFRESH_SECONDS = 10.0
+_USAGE_REFRESH_SECONDS = 15.0
 _MAX_RESPONSE_BYTES = 1024 * 1024
 _RPC_PATH = "/exa.language_server_pb.LanguageServerService/GetUserStatus"
 _SUMMARY_RPC_PATH = "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+_ACTIVITY_RPC_PATH = "/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories"
+_USAGE_RPC_PATH = "/exa.language_server_pb.LanguageServerService/GetCascadeTrajectoryGeneratorMetadata"
 _REQUEST_BODY = json.dumps(
     {
         "metadata": {
@@ -32,6 +37,8 @@ _REQUEST_BODY = json.dumps(
     separators=(",", ":"),
 ).encode("utf-8")
 _SUMMARY_REQUEST_BODY = b'{"forceRefresh":true}'
+_ACTIVITY_REQUEST_BODY = b'{"excludeSubtrajectories":true}'
+_RUN_STATUSES = {1: "IDLE", 2: "RUNNING", 3: "CANCELING", 4: "BUSY"}
 
 _DISCOVERY_SCRIPT = r'''
 $root = [IO.Path]::GetFullPath($env:AGENT_ANTIGRAVITY_ROOT)
@@ -65,6 +72,13 @@ class AntigravityAdapter:
         self.root = Path(root).expanduser() if root is not None else local_app_data / "Programs" / "antigravity"
         self._lock = threading.Lock()
         self._last_attempt: float | None = None
+        self._last_quota_attempt: float | None = None
+        self._last_runtime_attempt: float | None = None
+        self._runtime: dict[str, Any] | None = None
+        self._quota_result: dict[str, Any] | None = None
+        self._last_usage_attempt: float | None = None
+        self._usage_result: dict[str, Any] | None = None
+        self._usage_thread: threading.Thread | None = None
         self._last_result: dict[str, Any] | None = None
 
     def collect(self) -> dict[str, Any]:
@@ -72,7 +86,7 @@ class AntigravityAdapter:
             now = time.monotonic()
             if (
                 self._last_attempt is not None
-                and now - self._last_attempt < _MIN_REFRESH_SECONDS
+                and now - self._last_attempt < _ACTIVITY_REFRESH_SECONDS
                 and self._last_result is not None
             ):
                 return deepcopy(self._last_result)
@@ -90,24 +104,194 @@ class AntigravityAdapter:
                 )
             else:
                 try:
-                    runtime = self._discover_runtime()
+                    if (self._runtime is None or self._last_runtime_attempt is None
+                            or now - self._last_runtime_attempt >= _RUNTIME_REFRESH_SECONDS):
+                        self._runtime = self._discover_runtime()
+                        self._last_runtime_attempt = now
+                    runtime = self._runtime
                     if not runtime.get("app_running"):
                         result = self._offline_snapshot()
                     else:
                         servers = runtime.get("servers", [])
+                        if (self._quota_result is None or self._last_quota_attempt is None
+                                or now - self._last_quota_attempt >= _MIN_REFRESH_SECONDS):
+                            self._last_quota_attempt = now
+                            try:
+                                try:
+                                    summary = self._fetch_quota_summary(servers)
+                                    quota = self._parse_quota_summary(summary)
+                                except Exception:
+                                    # Older builds only expose per-model quotas.
+                                    quota = self._parse_user_status(self._fetch_user_status(servers))
+                            except Exception:
+                                quota = self._failure_snapshot()
+                            quota["subscription"].setdefault("updated_at", quota.get("updated_at"))
+                            self._quota_result = quota
+                        result = deepcopy(self._quota_result)
                         try:
-                            summary = self._fetch_quota_summary(servers)
-                            result = self._parse_quota_summary(summary)
+                            result.update(self._fetch_activity(servers))
+                            result["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
                         except Exception:
-                            # Older IDE builds can expose per-model quotas but
-                            # not the authoritative shared-window summary.
-                            payload = self._fetch_user_status(servers)
-                            result = self._parse_user_status(payload)
+                            # Let LastGoodStore retain the last credible count
+                            # and mark it for checking, rather than invent zero.
+                            result.update(state="unknown", observed_state="unknown", state_label="数据待更新",
+                                          active_tasks=None, active_tasks_known=False, stale=True)
+                            result["updated_at"] = (self._last_result or {}).get("updated_at")
+                            self._runtime = None
+                        if "GetAllCascadeTrajectories" not in result["source"]:
+                            result["source"] += "; GetAllCascadeTrajectories localhost RPC"
+                        self._start_usage_refresh(servers, now)
+                        result["tokens"] = deepcopy(self._usage_result or {
+                            "known": False, "total": None, "scope": "cumulative"})
+                        if self._usage_result is not None and not self._usage_result.get("known"):
+                            result["stale"] = True
+                        if "GetCascadeTrajectoryGeneratorMetadata" not in result["source"]:
+                            result["source"] += "; GetCascadeTrajectoryGeneratorMetadata localhost RPC"
                 except Exception:
                     result = self._failure_snapshot()
+                    result.update(state="unknown", observed_state="unknown", active_tasks=None, active_tasks_known=False)
+                    self._runtime = None
 
             self._last_result = result
             return deepcopy(result)
+
+    def _start_usage_refresh(self, servers: object, now: float) -> None:
+        if self._usage_thread is not None and self._usage_thread.is_alive():
+            return
+        if self._last_usage_attempt is not None and now - self._last_usage_attempt < _USAGE_REFRESH_SECONDS:
+            return
+        self._last_usage_attempt = now
+        candidates = deepcopy(servers)
+
+        def refresh() -> None:
+            try:
+                result = self._fetch_tokens(candidates)
+            except Exception:
+                result = {"known": False, "total": None, "scope": "cumulative"}
+            with self._lock:
+                self._usage_result = result
+
+        self._usage_thread = threading.Thread(target=refresh, daemon=True, name="antigravity-usage")
+        self._usage_thread.start()
+
+    @staticmethod
+    def _token_count(value: object) -> int:
+        if type(value) is int and 0 <= value <= 2**64 - 1:
+            return value
+        if isinstance(value, str) and re.fullmatch(r"[0-9]{1,20}", value):
+            count = int(value)
+            if count <= 2**64 - 1:
+                return count
+        raise ValueError("invalid token count")
+
+    @classmethod
+    def _fetch_tokens(cls, servers: object) -> dict[str, Any]:
+        if not isinstance(servers, list) or not servers:
+            raise RuntimeError("usage server unavailable")
+        # Include child trajectories for consumption, while activity counts
+        # only parent tasks. IDs are temporary deduplication keys, never saved.
+        owners = {}
+        for server in servers:
+            payload = cls._fetch_local_rpc([server], _ACTIVITY_RPC_PATH, b'{"excludeSubtrajectories":false}')
+            if not payload:
+                summaries = {}
+            else:
+                summaries = payload.get("trajectorySummaries")
+            if not isinstance(summaries, dict):
+                raise ValueError("usage trajectory map missing")
+            for identity in summaries:
+                if not isinstance(identity, str) or not identity:
+                    raise ValueError("invalid usage trajectory")
+                owners.setdefault(identity, server)
+        if not owners:
+            raise ValueError("usage trajectories unavailable")
+        if len(owners) > 128:
+            raise ValueError("usage trajectory limit exceeded")
+
+        records = {}
+        requests = 0
+        for identity, server in owners.items():
+            offset = 0
+            while True:
+                requests += 1
+                if requests > 256:
+                    raise ValueError("usage request limit exceeded")
+                body = json.dumps({"cascadeId": identity, "generatorMetadataOffset": offset,
+                                   "includeMessages": False}, separators=(",", ":")).encode("utf-8")
+                payload = cls._fetch_local_rpc([server], _USAGE_RPC_PATH, body)
+                page = payload.get("generatorMetadata", []) if not payload or "generatorMetadata" in payload else None
+                if not isinstance(page, list):
+                    raise ValueError("usage metadata missing")
+                if not page:
+                    break
+                if offset + len(page) > 8192:
+                    raise ValueError("usage metadata limit exceeded")
+                for index, entry in enumerate(page):
+                    if not isinstance(entry, dict):
+                        raise ValueError("invalid generator metadata")
+                    model = entry.get("chatModel")
+                    if not isinstance(model, dict):
+                        continue
+                    usage = model.get("usage")
+                    if not isinstance(usage, dict) or not any(
+                            key in usage for key in ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens")):
+                        continue
+                    counts = tuple(cls._token_count(usage.get(key, 0)) for key in
+                                   ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "thinkingOutputTokens"))
+                    message = usage.get("messageId")
+                    key = ("message", message) if isinstance(message, str) and message else ("generator", identity, offset + index)
+                    if key in records and records[key] != counts:
+                        raise ValueError("conflicting usage metadata")
+                    records[key] = counts
+                offset += len(page)
+        if owners and not records:
+            raise ValueError("usage counts unavailable")
+        totals = [sum(counts[index] for counts in records.values()) for index in range(5)]
+        return {"known": True, "scope": "cumulative", "input": totals[0], "output": totals[1],
+                "cached": totals[2], "cache_write": totals[3], "reasoning": totals[4],
+                "total": totals[0] + totals[1]}
+
+    @classmethod
+    def _trajectory_statuses(cls, payload: object) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            raise ValueError("invalid activity response")
+        # Empty proto3 maps can be omitted from the JSON response.
+        rows = payload.get("trajectorySummaries", {}) if not payload or "trajectorySummaries" in payload else None
+        if not isinstance(rows, dict):
+            raise ValueError("activity summary map missing")
+        statuses = {}
+        for identity, row in rows.items():
+            if not isinstance(identity, str) or not identity or not isinstance(row, dict):
+                raise ValueError("invalid activity summary")
+            raw = row.get("status")
+            if isinstance(raw, str) and raw.startswith("CASCADE_RUN_STATUS_"):
+                status = raw.removeprefix("CASCADE_RUN_STATUS_")
+            elif type(raw) is int:
+                status = _RUN_STATUSES.get(raw)
+            else:
+                status = None
+            if status not in _RUN_STATUSES.values():
+                raise ValueError("unknown activity status")
+            # IDs exist only during this request, for cross-window deduplication.
+            # Titles, workspaces and message/step bodies are never copied.
+            statuses[identity] = status
+        return statuses
+
+    @classmethod
+    def _fetch_activity(cls, servers: object) -> dict[str, Any]:
+        if not isinstance(servers, list) or not servers:
+            raise RuntimeError("activity server unavailable")
+        statuses: dict[str, str] = {}
+        for server in servers:
+            rows = cls._trajectory_statuses(cls._fetch_local_rpc([server], _ACTIVITY_RPC_PATH, _ACTIVITY_REQUEST_BODY))
+            for identity, status in rows.items():
+                if identity in statuses and statuses[identity] != status:
+                    raise ValueError("conflicting activity summaries")
+                statuses[identity] = status
+        count = sum(status in {"RUNNING", "BUSY", "CANCELING"} for status in statuses.values())
+        state = "working" if count else "idle"
+        return {"state": state, "observed_state": state, "state_label": "工作中" if count else "空闲",
+                "active_tasks": count, "active_tasks_known": True}
 
     def _discover_runtime(self) -> dict[str, Any]:
         if os.name != "nt":

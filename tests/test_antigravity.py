@@ -1,14 +1,17 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agent_dashboard.adapters.antigravity import (
     AntigravityAdapter,
+    _ACTIVITY_RPC_PATH,
     _RPC_PATH,
     _SUMMARY_RPC_PATH,
 )
+from agent_dashboard.retention import LastGoodStore
 
 
 RESET = "2035-02-07T10:00:00Z"
@@ -86,7 +89,64 @@ def quota_summary_payload():
     }
 
 
+def activity_payload(rows):
+    return {"trajectorySummaries": rows}
+
+
+def activity_result(count):
+    state = "working" if count else "idle"
+    return {"state": state, "observed_state": state,
+            "state_label": "工作中" if count else "空闲",
+            "active_tasks": count, "active_tasks_known": True}
+
+
 class AntigravityAdapterTests(unittest.TestCase):
+    def test_activity_counts_running_canceling_and_busy_but_not_idle(self):
+        statuses = ((1, 0), (2, 1), (3, 1), (4, 1), ("CASCADE_RUN_STATUS_BUSY", 1))
+        for status, expected_count in statuses:
+            with self.subTest(status=status), patch.object(
+                    AntigravityAdapter, "_fetch_local_rpc",
+                    return_value=activity_payload({"synthetic-id": {"status": status}})):
+                result = AntigravityAdapter._fetch_activity([{"csrf": "synthetic", "ports": [61234]}])
+            self.assertEqual(result["active_tasks"], expected_count)
+            self.assertEqual(result["active_tasks_known"], True)
+            self.assertEqual(result["state"], "working" if expected_count else "idle")
+
+    def test_activity_deduplicates_same_id_across_servers_and_rejects_conflicts(self):
+        servers = [{"csrf": "synthetic-a", "ports": [61234]},
+                   {"csrf": "synthetic-b", "ports": [61235]}]
+        running = activity_payload({"synthetic-trajectory": {"status": 2}})
+        with patch.object(AntigravityAdapter, "_fetch_local_rpc", side_effect=[running, running]):
+            result = AntigravityAdapter._fetch_activity(servers)
+        self.assertEqual(result["active_tasks"], 1)
+
+        conflicting = activity_payload({"synthetic-trajectory": {"status": 1}})
+        with patch.object(AntigravityAdapter, "_fetch_local_rpc", side_effect=[running, conflicting]):
+            with self.assertRaisesRegex(ValueError, "conflicting activity summaries"):
+                AntigravityAdapter._fetch_activity(servers)
+
+    def test_unknown_activity_status_is_not_reported_as_zero(self):
+        payload = activity_payload({"synthetic-trajectory": {"status": 99}})
+        with patch.object(AntigravityAdapter, "_fetch_local_rpc", return_value=payload):
+            with self.assertRaisesRegex(ValueError, "unknown activity status"):
+                AntigravityAdapter._fetch_activity([{"csrf": "synthetic", "ports": [61234]}])
+
+    def test_activity_rpc_excludes_subtrajectories_and_discards_private_fields(self):
+        payload = activity_payload({"synthetic-trajectory": {
+            "status": 4, "title": "synthetic private title", "prompt": "synthetic private prompt",
+            "workspace": "synthetic/private/path",
+        }})
+        with patch.object(AntigravityAdapter, "_fetch_local_rpc", return_value=payload) as rpc:
+            result = AntigravityAdapter._fetch_activity([{"csrf": "synthetic", "ports": [61234]}])
+
+        args, _kwargs = rpc.call_args
+        self.assertEqual(args[1], _ACTIVITY_RPC_PATH)
+        self.assertEqual(json.loads(args[2]), {"excludeSubtrajectories": True})
+        self.assertEqual(set(result), {"state", "observed_state", "state_label", "active_tasks", "active_tasks_known"})
+        self.assertEqual(result["active_tasks"], 1)
+        self.assertNotIn("synthetic private", json.dumps(result))
+        self.assertNotIn("synthetic/private", json.dumps(result))
+
     def test_maps_legacy_per_model_quota_without_guessing_five_hour_or_weekly(self):
         result = AntigravityAdapter._parse_user_status(status_payload())
 
@@ -252,14 +312,98 @@ class AntigravityAdapterTests(unittest.TestCase):
                 patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": []}),
                 patch.object(adapter, "_fetch_quota_summary", return_value=quota_summary_payload()) as summary,
                 patch.object(adapter, "_fetch_user_status", side_effect=AssertionError("legacy fallback called")) as legacy,
+                patch.object(adapter, "_fetch_activity", return_value=activity_result(1)) as activity,
                 patch("agent_dashboard.adapters.antigravity.time.monotonic", return_value=100.0),
             ):
                 result = adapter.collect()
 
         summary.assert_called_once_with([])
         legacy.assert_not_called()
+        activity.assert_called_once_with([])
+        self.assertEqual(result["active_tasks"], 1)
         self.assertTrue(result["subscription"]["five_hour"]["known"])
         self.assertTrue(result["subscription"]["weekly"]["known"])
+
+    def test_activity_refresh_after_two_seconds_does_not_refresh_quota(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            adapter = AntigravityAdapter(root)
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": []}) as discover,
+                patch.object(adapter, "_fetch_quota_summary", return_value=quota_summary_payload()) as quota,
+                patch.object(adapter, "_fetch_user_status") as legacy,
+                patch.object(adapter, "_fetch_activity", side_effect=[activity_result(2), activity_result(0)]) as activity,
+                patch("agent_dashboard.adapters.antigravity.time.monotonic", side_effect=[100.0, 103.0]),
+            ):
+                first = adapter.collect()
+                second = adapter.collect()
+
+        discover.assert_called_once_with()
+        quota.assert_called_once_with([])
+        legacy.assert_not_called()
+        self.assertEqual(activity.call_count, 2)
+        self.assertEqual((first["active_tasks"], first["state"]), (2, "working"))
+        self.assertEqual((second["active_tasks"], second["state"]), (0, "idle"))
+        self.assertEqual(first["subscription"]["weekly"], second["subscription"]["weekly"])
+
+    def test_quota_failure_does_not_block_fresh_activity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            adapter = AntigravityAdapter(root)
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": []}),
+                patch.object(adapter, "_fetch_quota_summary", side_effect=RuntimeError("synthetic quota failure")),
+                patch.object(adapter, "_fetch_user_status", side_effect=RuntimeError("synthetic legacy failure")),
+                patch.object(adapter, "_fetch_activity", side_effect=[activity_result(1), activity_result(0)]) as activity,
+                patch("agent_dashboard.adapters.antigravity.time.monotonic", side_effect=[200.0, 203.0]),
+            ):
+                first = adapter.collect()
+                second = adapter.collect()
+
+        self.assertEqual(activity.call_count, 2)
+        self.assertEqual((first["active_tasks"], first["state"]), (1, "working"))
+        self.assertEqual((second["active_tasks"], second["state"]), (0, "idle"))
+        self.assertTrue(second["stale"])  # Quota remains unavailable while activity is fresh.
+
+    def test_activity_failure_retains_count_but_fresh_idle_zero_replaces_busy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            adapter = AntigravityAdapter(root)
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": []}),
+                patch.object(adapter, "_fetch_quota_summary", return_value=quota_summary_payload()) as quota,
+                patch.object(adapter, "_fetch_activity",
+                             side_effect=[activity_result(4), RuntimeError("synthetic activity failure"),
+                                          activity_result(0)]) as activity,
+                patch("agent_dashboard.adapters.antigravity.time.monotonic", side_effect=[100.0, 102.0, 104.0]),
+            ):
+                working = adapter.collect()
+                failed = adapter.collect()
+                idle = adapter.collect()
+
+        quota.assert_called_once_with([])
+        self.assertEqual(activity.call_count, 3)
+        self.assertEqual((working["state"], working["active_tasks"]), ("working", 4))
+        self.assertEqual((failed["state"], failed["active_tasks"]), ("unknown", None))
+        self.assertTrue(failed["stale"])
+
+        store = LastGoodStore()
+        first_time = datetime.fromisoformat(working["updated_at"].replace("Z", "+00:00"))
+        store.merge(working, first_time)
+        failed_time = first_time + timedelta(seconds=2)
+        retained = store.merge(failed, failed_time)
+        self.assertEqual(retained["active_tasks"], 4)
+        self.assertEqual(retained["state"], "working")
+        self.assertIn("active_tasks", retained["retained_fields"])
+
+        idle_time = datetime.fromisoformat(idle["updated_at"].replace("Z", "+00:00"))
+        completed = store.merge(idle, idle_time)
+        self.assertEqual(completed["active_tasks"], 0)
+        self.assertEqual(completed["state"], "idle")
+        self.assertNotIn("active_tasks", completed["retained_fields"])
 
     def test_offline_snapshot_retains_both_shared_gemini_windows_as_stale(self):
         adapter = AntigravityAdapter("unused")
@@ -290,7 +434,7 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertTrue(failed["stale"])
         self.assertNotIn("private error", failed["detail"])
 
-    def test_throttles_requests_for_sixty_seconds_and_returns_a_copy(self):
+    def test_throttles_quota_for_sixty_seconds_but_refreshes_activity_after_two_seconds(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "Antigravity.exe").write_bytes(b"installed")
@@ -299,6 +443,7 @@ class AntigravityAdapterTests(unittest.TestCase):
                 patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": []}) as discover,
                 patch.object(adapter, "_fetch_quota_summary", side_effect=RuntimeError("summary unavailable")) as summary,
                 patch.object(adapter, "_fetch_user_status", return_value=status_payload()) as fetch,
+                patch.object(adapter, "_fetch_activity", return_value=activity_result(0)) as activity,
                 patch("agent_dashboard.adapters.antigravity.time.monotonic", side_effect=[100.0, 159.0, 161.0]),
             ):
                 first = adapter.collect()
@@ -309,6 +454,7 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertEqual(discover.call_count, 2)
         self.assertEqual(summary.call_count, 2)
         self.assertEqual(fetch.call_count, 2)
+        self.assertEqual(activity.call_count, 3)
         self.assertEqual(len(second["subscription"]["quota_windows"]), 4)
         self.assertEqual(len(third["subscription"]["quota_windows"]), 4)
 

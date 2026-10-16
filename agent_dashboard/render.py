@@ -251,7 +251,9 @@ def _agent_metrics(data: dict, today: str | None = None) -> dict:
     tokens = data.get("tokens") or {}
     date_label = "今日 TOKENS"
     token_date = tokens.get("date") or ""
-    if token_date and token_date != (today or datetime.now().astimezone().date().isoformat()):
+    if tokens.get("scope") == "cumulative":
+        date_label = "累计 TOKENS"
+    elif token_date and token_date != (today or datetime.now().astimezone().date().isoformat()):
         date_label = str(token_date)[5:].replace("-", "/") + " TOKENS"
     return {
         "provider": data.get("provider"),
