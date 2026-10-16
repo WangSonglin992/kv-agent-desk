@@ -10,6 +10,20 @@ KV Agent Desk 提供三种内置 LCD 样式：
 
 三套样式使用一致的数据布局。Token 数字采用十进制单位：K 为千、M 为百万、B 为十亿。任务数或 Token 用量没有可信当前值且没有可信历史时显示 `0` 占位；已有可信历史继续保留。此时的 `0` 不代表已采集到 0 项任务或 0 Token，未知额度仍保持未知。Antigravity 展示 Gemini 共享的 5 小时和周额度，不列出逐模型额度或 Claude/GPT 额度组。
 
+## 在预览中编辑布局
+
+点击预览画面或“编辑布局”进入编辑模式。点击文字、图标或图形即可选中；按住 Ctrl 点击可增加或取消多选，空白卡片区域可选择整组卡片。选框只用于编辑，不会出现在 LCD 上。
+
+- 用方向键移动 1 个画布像素，Shift 加方向键移动 10 像素；也可拖动或输入 X/Y。输入框获得焦点时，方向键保留输入框本身的操作。
+- 多选时，X/Y 和移动操作保持各元素的相对距离。父卡片与其子元素同时选中时，子元素不会重复移动。
+- 可将所选对象左对齐、水平居中、右对齐、顶端对齐、垂直居中或底端对齐。三个及以上对象支持水平或垂直等间距分布。
+- 文字可单独设置字号、字体、文字颜色、加粗和斜体，也可多选后一起设置。图标和图形不接受文字样式。
+- 字体列表来自本机系统和当前用户的字体目录。模板只记录字体 ID；另一台电脑缺少该字体时使用默认字体，不会下载或安装字体。
+
+这里不能编辑文字内容、数值、数据绑定或图片。套餐资料仍在套餐信息板块填写；任务状态、额度、余额和用量继续由原来的数据模块提供。
+
+改动先保存在草稿中，预览不会更改当前设置或发送画面到 LCD。可重置所选元素、撤销草稿或取消；“保存并应用”才持久化并更新屏幕。内置样式会保存为自定义副本，保留原版。样式选择和元素设置都会在重启后恢复。
+
 ## 导入和导出
 
 导出内置样式后，先把 `id` 改成新的标识（例如 `my_ocean`），并修改 `name`，再调整外观参数并导入。已有自定义样式可使用相同 `id` 更新。导入成功后立即应用，无需重启。
@@ -22,7 +36,11 @@ KV Agent Desk 提供三种内置 LCD 样式：
 
 控制页可以将界面样式导出为 JSON 文件，也可以导入之前保存的模板。导入文件上限为 64 KiB。应用会校验 JSON 格式及受支持的模板字段；不符合格式或超出大小限制的文件会被拒绝。
 
-导出文件采用版本 1 的 profile manifest。顶层字段为 `schema_version`、`id`、`name`、`layout`、`canvas`、`colors`、`font_scale`、`radius` 和 `geometry`；当前画布固定为 `[1920, 480]`。`layout` 只能是 `classic`、`aurora` 或 `paper`，自定义 profile 的 `id` 不能与内置样式冲突。可选样式字段从对应布局继承默认值；不支持的额外字段会被拒绝。
+导出文件采用版本 1 的 profile manifest。顶层字段为 `schema_version`、`id`、`name`、`layout`、`canvas`、`colors`、`font_scale`、`radius`、`geometry` 和可选的 `elements`；当前画布固定为 `[1920, 480]`。`layout` 只能是 `classic`、`aurora` 或 `paper`，自定义 profile 的 `id` 不能与内置样式冲突。可选样式字段从对应布局继承默认值；旧模板不含 `elements` 时按空覆盖读取。
+
+`elements` 的键必须是内置注册的元素 ID，例如 `agent.codex.plan_name`、`agent.antigravity.tokens_total` 或整组 `account.deepseek_lab`。所有元素可设置整数 `dx`（−1920 至 1920）和 `dy`（−480 至 480）；文字还可设置 `font_size`（8–96 像素）、`font_family`（本机字体 ID）、`color`（`#RRGGBB`）、`bold` 和 `italic`（布尔值）。位置覆盖相对于基础样式，组移动会叠加到子元素；控制页的 X/Y 则显示实际画布坐标。元素字号不再乘全局 `font_scale`。
+
+模板不接受 `text`、`content`、`value`、`binding`、字体文件路径或其它任意字段；编辑器的预览图像与选框清单也不会写入模板。
 
 可覆盖的颜色角色为 `background`、`surface`、`surface_alt`、`edge`、`text`、`muted`、`subtle`、`codex`、`zcode`、`antigravity`、`working`、`waiting`、`idle`、`offline`、`unknown` 和 `busy`，颜色值使用 `#RRGGBB` 格式。`font_scale` 范围为 90–115 的整数，`radius` 范围为 0–28 的整数。`geometry` 仅接受以下字段，单位为画布像素：
 

@@ -1,4 +1,6 @@
 import argparse
+import hashlib
+import json
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -23,6 +25,23 @@ class FakeDevice:
 
 
 class StartupRestoreTests(unittest.TestCase):
+    def test_pre_editor_profile_hash_still_restores_the_last_frame(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            app = Dashboard(parser().parse_args(["--no-browser", "--state-dir", folder]))
+            old_profile = app.current_profile()
+            old_profile.pop("elements", None)
+            old_hash = hashlib.sha256(json.dumps(old_profile, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+            (root / "last-frame-meta.json").write_text(json.dumps({"ui_id": old_profile["id"], "profile_hash": old_hash}))
+            Image.new("RGB", (1920, 480), (220, 50, 20)).save(root / "last-frame.png")
+            app.device = FakeDevice()
+            app.display_status = app.device.status()
+            app.adapters = [object()]
+            app.restore_frame()
+            self.assertTrue(app.restored_before_refresh)
+            pixel = Image.open(BytesIO(app.device.frames[0])).getpixel((100, 100))
+            self.assertGreater(pixel[0], 210)
+
     def test_restore_sends_saved_picture_before_any_provider_query(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

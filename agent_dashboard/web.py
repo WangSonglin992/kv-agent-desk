@@ -1,5 +1,7 @@
 """Local control page. Session data is never interpolated into executable HTML."""
 
+from .layout_editor import LAYOUT_EDITOR_CSS, LAYOUT_EDITOR_HTML, LAYOUT_EDITOR_JS
+
 PAGE = r'''<!doctype html>
 <html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>KV Agent Desk · Codex · ZCode · Antigravity</title>
@@ -10,7 +12,7 @@ PAGE = r'''<!doctype html>
 header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;gap:20px}
 h1{font-size:27px;letter-spacing:-.6px;margin:0}h1 span{font-size:14px;font-weight:400;color:var(--ui-muted);margin-left:14px}
 .label{font-family:Consolas,monospace;font-size:12px;letter-spacing:2px;color:var(--ui-codex);margin-bottom:8px}
-.preview{border:1px solid var(--ui-edge);border-radius:var(--ui-radius);overflow:hidden;box-shadow:0 24px 80px #0005;background:var(--ui-background)}
+.preview{position:relative;border:1px solid var(--ui-edge);border-radius:var(--ui-radius);overflow:hidden;box-shadow:0 24px 80px #0005;background:var(--ui-background)}
 #frame{display:block;width:100%;height:auto;aspect-ratio:4/1}
 .caption{display:flex;justify-content:space-between;color:var(--ui-muted);font-size:13px;padding:15px 2px;margin-bottom:22px;gap:15px}
 .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -26,11 +28,13 @@ button{border:1px solid var(--ui-edge);background:var(--ui-surface-alt);color:va
 @media(max-width:800px){body{padding:24px 15px}header{align-items:flex-start}h1 span{display:block;margin:8px 0 0}.cards{grid-template-columns:1fr}.caption{font-size:11px}.pill{display:none}}
 @media(max-width:800px){.plans{grid-template-columns:1fr}}
 @media(max-width:800px){.ui-gallery{grid-template-columns:1fr}}
+__LAYOUT_EDITOR_CSS__
 </style>
 <header><div><div class="label">LOCAL AGENT TELEMETRY</div><h1>KV Agent Desk <span>Codex · ZCode · Antigravity · Windows</span></h1></div><span class="pill">本机采集 / 官方额度</span></header>
-<div class="preview"><img id="frame" src="/frame.png" alt="KV 9.16 仪表盘实时画面"></div>
+<div class="preview" id="main-preview"><img id="frame" src="/frame.png" alt="KV 9.16 仪表盘实时画面" role="button" tabindex="0" aria-label="打开可视布局编辑"><button type="button" class="layout-open-overlay" id="layout-editor-open" aria-label="编辑仪表盘布局">编辑布局</button></div>
 <div class="caption"><span>屏幕与预览使用同一张画面 · 1920 × 480 设计画布</span><span id="refresh">正在连接本机服务</span></div>
-<div class="controls"><button id="usb">连接 USB 屏幕</button><button id="fullscreen">全屏预览</button><button class="danger" id="stop">退出应用</button><span id="feedback" role="status" aria-live="polite"></span></div>
+<div class="controls"><button id="usb">连接 USB 屏幕</button><button id="fullscreen">全屏预览</button><button type="button" id="layout-editor-open-control">编辑布局</button><button class="danger" id="stop">退出应用</button><span id="feedback" role="status" aria-live="polite"></span></div>
+__LAYOUT_EDITOR_HTML__
 <div class="device-settings"><label for="brightness">屏幕画面亮度（软件调光）<input id="brightness" type="range" min="0" max="100" step="1" value="100"><output id="brightness-value">100%</output></label><label for="rotation">屏幕方向<select id="rotation"><option value="180">旋转180°</option><option value="0">正常方向</option></select></label><label><input id="auto-start" type="checkbox">开机自启并恢复上次画面</label><span id="startup-status"></span><label><input id="codex-no-five-hour-limit" type="checkbox">ChatGPT 无5小时限额（手动设为100%）</label></div>
 <section class="ui-picker"><h2>仪表盘风格</h2><p class="ui-help">选择内置样式，或导入通过校验的 JSON 样式包。包只包含配色、字号、布局与圆角；导出内置模板后修改 id 和名称再导入。不含会话、额度或账户数据，也不会执行代码。</p><div id="ui-gallery" class="ui-gallery" role="group" aria-label="仪表盘风格"></div><div class="ui-tools"><button type="button" id="ui-import-button">导入并应用 UI</button><input id="ui-import-file" type="file" accept=".json,application/json" hidden><a id="ui-export" href="/api/ui/export">导出当前样式 JSON</a><span id="ui-status" class="ui-status" role="status" aria-live="polite"></span></div></section>
 <div class="cards"><section class="card"><h2 class="provider-heading"><span class="provider-logo chatgpt"><img src="/assets/chatgpt.png" alt="" aria-hidden="true"></span><span>Codex / ChatGPT 订阅</span></h2><p class="status" id="codex-state"></p><p id="codex-fresh"></p><p id="codex-quota"></p><p class="detail" id="codex-source"></p><p class="detail" id="codex-detail"></p></section>
@@ -95,4 +99,9 @@ document.getElementById('brightness').oninput=e=>{text('brightness-value',e.targ
 async function saveProfile(provider,clear=false){const form=document.getElementById(provider+'-subscription');const buttons=[...form.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);try{const profile=clear?{}:{plan_name:document.getElementById(provider+'-plan-name').value,plan_spec:document.getElementById(provider+'-plan-spec').value,expires_at:document.getElementById(provider+'-expires').value};const r=await fetch('/api/subscriptions',{method:'POST',headers:{'Content-Type':'application/json','X-Dashboard-Token':token},body:JSON.stringify({provider,profile})});const result=await r.json();if(!r.ok)throw Error(result.error||'保存失败');dirtyProfiles.delete(provider);text(provider+'-plan-status',clear?'手动填写已清除，恢复自动信息':'已保存，屏幕稍后同步更新');await update()}catch(e){text(provider+'-plan-status',e.message)}finally{buttons.forEach(b=>b.disabled=false)}}
 for(const provider of ['codex','zcode','antigravity']){document.getElementById(provider+'-subscription').onsubmit=e=>{e.preventDefault();saveProfile(provider)};document.getElementById(provider+'-clear').onclick=()=>saveProfile(provider,true);for(const id of ['plan-name','plan-spec','expires'])document.getElementById(provider+'-'+id).oninput=()=>dirtyProfiles.add(provider)}
 setupUiImport();update();setInterval(update,2000);refreshFrame();setInterval(refreshFrame,120);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshFrame()});
+__LAYOUT_EDITOR_JS__
 </script></html>'''
+
+PAGE = PAGE.replace("__LAYOUT_EDITOR_CSS__", LAYOUT_EDITOR_CSS)
+PAGE = PAGE.replace("__LAYOUT_EDITOR_HTML__", LAYOUT_EDITOR_HTML)
+PAGE = PAGE.replace("__LAYOUT_EDITOR_JS__", LAYOUT_EDITOR_JS)

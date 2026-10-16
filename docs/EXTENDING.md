@@ -67,4 +67,6 @@
 
 添加额度卡片或新 Agent 前，请同步更新 `README.md` 与 `docs/PRIVACY.md`，说明可验证的数据来源、请求目的、凭据保存方式和未知/过期行为。
 
-只调整现有面板的宽度、字号或间距时，主要修改 `render.py` 的 `draw_agent()`、`draw_account()` 与 `render()`。本机控制页的排版独立位于 `web.py` 的 CSS。新增发布资源还需同步 `tools/check_public_tree.py` 的公共文件白名单；提交前暂存文件，再运行该检查器。
+调整现有元素的位置和文字样式时，可直接使用应用内布局编辑器或 JSON 模板的 `elements`。新增可编辑元素时，先在 `ui_elements.py` 注册固定 ID、类型、标签和所属组，再通过 `render.py` 的 `SceneCanvas` 图元绘制；ID 不应取自内容、遍历顺序或代码行号。`render_scene()` 返回预览图和不含内容的元素清单，`render()` 使用相同绘制路径输出 LCD 画面。新增数据字段仍须从适配器和显示白名单接入，不能由样式模板指定数据绑定。
+
+本机控制页位于 `web.py`，布局编辑工具栏位于 `layout_editor.py`，本机字体解析位于 `ui_fonts.py`。新增发布资源还需同步 `tools/check_public_tree.py` 的公共文件白名单；提交前暂存文件，再运行该检查器。

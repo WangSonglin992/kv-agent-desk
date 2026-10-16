@@ -15,6 +15,8 @@ import tempfile
 import threading
 from typing import Any
 
+from .ui_elements import ELEMENT_DEFINITIONS
+
 
 SCHEMA_VERSION = 1
 CANVAS = [1920, 480]
@@ -50,8 +52,9 @@ GEOMETRY_DEFAULTS = {
 
 _PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}\Z")
+_FONT_FAMILY_ID = re.compile(r"[a-z0-9_-]{1,64}\Z")
 _ROOT_KEYS = frozenset(
-    {"schema_version", "id", "name", "layout", "canvas", "colors", "font_scale", "radius", "geometry"}
+    {"schema_version", "id", "name", "layout", "canvas", "colors", "font_scale", "radius", "geometry", "elements"}
 )
 _GEOMETRY_RANGES = {
     "margin": (16, 64),
@@ -135,6 +138,7 @@ BUILTIN_PROFILES: dict[str, dict[str, Any]] = {
         "font_scale": 100,
         "radius": {"classic": 18, "aurora": 24, "paper": 10}[profile_id],
         "geometry": GEOMETRY_DEFAULTS.copy(),
+        "elements": {},
     }
     for profile_id in LAYOUTS
 }
@@ -193,7 +197,7 @@ class UIProfiles:
             return self._load_custom(profile_id) is not None
 
     def import_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
-        normalized = self._normalize(profile)
+        normalized = self.validate(profile)
         profile_id = normalized["id"]
         if profile_id in BUILTIN_PROFILES:
             raise ValueError("custom profile id conflicts with a built-in profile")
@@ -218,6 +222,15 @@ class UIProfiles:
             if custom is None:
                 raise ValueError("unknown UI profile")
             return custom
+
+    @staticmethod
+    def validate(profile: dict[str, Any]) -> dict[str, Any]:
+        """Validate and normalize a draft without saving it.
+
+        Built-in IDs are valid here so an editor can validate a built-in style
+        draft. ``import_profile`` separately prevents replacing built-ins.
+        """
+        return UIProfiles._normalize(profile)
 
     @staticmethod
     def _summary(profile: dict[str, Any], builtin: bool) -> dict[str, Any]:
@@ -298,6 +311,8 @@ class UIProfiles:
             geometry[key] = value
         _validate_geometry(geometry)
 
+        elements = _normalize_elements(profile.get("elements", {}))
+
         normalized = {
             "schema_version": SCHEMA_VERSION,
             "id": profile_id,
@@ -308,6 +323,7 @@ class UIProfiles:
             "font_scale": font_scale,
             "radius": radius,
             "geometry": geometry,
+            "elements": elements,
         }
         _check_profile_size(normalized)
         return normalized
@@ -399,6 +415,52 @@ def _has_forbidden_text(value: str) -> bool:
         return True
     lowered = value.casefold()
     return any(marker in lowered for marker in ("<", ">", "://", "javascript:", "file:")) or "/" in value or "\\" in value
+
+
+def _normalize_elements(elements: object) -> dict[str, dict[str, Any]]:
+    if not isinstance(elements, dict) or any(not isinstance(key, str) for key in elements):
+        raise ValueError("elements must be an object")
+    normalized: dict[str, dict[str, int]] = {}
+    for element_id, override in elements.items():
+        definition = ELEMENT_DEFINITIONS.get(element_id)
+        if definition is None:
+            raise ValueError("unknown UI element id")
+        if not isinstance(override, dict) or any(not isinstance(key, str) for key in override):
+            raise ValueError("element override must be an object")
+        kind = definition["kind"]
+        allowed = {"dx", "dy", "font_size", "font_family", "color", "bold", "italic"} if kind == "text" else {"dx", "dy"}
+        if set(override) - allowed:
+            raise ValueError("unsupported UI element override field")
+        values: dict[str, Any] = {}
+        for key, value in override.items():
+            if key == "font_family":
+                if not isinstance(value, str) or not _FONT_FAMILY_ID.fullmatch(value):
+                    raise ValueError(f"elements.{element_id}.font_family must be an opaque lowercase id")
+                values[key] = value
+                continue
+            if key == "color":
+                if not isinstance(value, str) or not _COLOR.fullmatch(value):
+                    raise ValueError(f"elements.{element_id}.color must be a #RRGGBB color")
+                values[key] = value.upper()
+                continue
+            if key in {"bold", "italic"}:
+                if type(value) is not bool:
+                    raise ValueError(f"elements.{element_id}.{key} must be a boolean")
+                values[key] = value
+                continue
+            if type(value) is not int:
+                raise ValueError(f"elements.{element_id}.{key} must be an integer")
+            minimum, maximum = {
+                "dx": (-1920, 1920),
+                "dy": (-480, 480),
+                "font_size": (8, 96),
+            }[key]
+            if not minimum <= value <= maximum:
+                raise ValueError(f"elements.{element_id}.{key} is outside its allowed range")
+            values[key] = value
+        if values:
+            normalized[element_id] = values
+    return normalized
 
 
 def _validate_geometry(geometry: dict[str, int]) -> None:

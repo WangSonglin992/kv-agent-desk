@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from copy import deepcopy
 from datetime import datetime
 import hashlib
@@ -13,6 +14,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import socket
@@ -34,6 +36,8 @@ from .accounts.monitor import AccountMonitor
 from .settings import AppSettings, get_autostart, set_autostart
 from .web import PAGE
 from .ui_profiles import UIProfiles
+from .ui_elements import ELEMENT_DEFINITIONS
+from .ui_fonts import font_catalogue, is_font_family_id
 
 APP_ID = "kv-agent-desk"
 PROVIDERS = (("codex", "Codex"), ("zcode", "ZCode"), ("antigravity", "Antigravity"))
@@ -229,7 +233,11 @@ class Dashboard:
 
     @staticmethod
     def profile_hash(profile: dict) -> str:
-        return hashlib.sha256(json.dumps(profile, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+        canonical = dict(profile)
+        if not canonical.get("elements"):
+            # Empty optional overrides must not invalidate pre-editor frames.
+            canonical.pop("elements", None)
+        return hashlib.sha256(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
     def ui_catalogue(self) -> dict:
         return {"active_id": self.current_profile()["id"], "profiles": self.ui_profiles.list(),
@@ -246,6 +254,71 @@ class Dashboard:
                                profile=profile, animation_time=.25)
                 self.ui_preview_cache[key] = self.encode(image, "PNG")
             return self.ui_preview_cache[key]
+
+    def ui_editor_preview(self, profile: dict) -> dict:
+        """Render a validated style draft against a copy of the current snapshot."""
+        normalized = self.ui_profiles.validate(profile)
+        with self.lock:
+            snapshot = deepcopy(self.snapshot)
+
+        try:
+            from importlib import import_module
+            renderer = import_module(".render", __package__)
+            with self.render_lock:
+                image, manifest = renderer.render_scene(snapshot, profile=normalized, animation_time=0)
+            if not isinstance(image, Image.Image) or not isinstance(manifest, list):
+                raise TypeError("invalid render scene")
+            png = self.encode(image, "PNG")
+            scene = self._safe_editor_scene(manifest)
+        except Exception as exc:
+            raise RuntimeError("UI preview render failed") from exc
+
+        return {"profile": normalized,
+                "image": "data:image/png;base64," + base64.b64encode(png).decode("ascii"),
+                "scene": scene}
+
+    @staticmethod
+    def _safe_editor_scene(manifest: list) -> list[dict]:
+        """Expose geometry and trusted labels only, never rendered content."""
+        fields = ("bbox", "default_bbox", "font_size", "default_font_size")
+        style_fields = ("default_color", "color", "default_bold", "bold", "default_italic", "italic",
+                        "default_font_family", "font_family")
+        safe_scene = []
+        for item in manifest:
+            if not isinstance(item, dict):
+                raise TypeError("invalid scene manifest")
+            element_id = item.get("id")
+            definition = ELEMENT_DEFINITIONS.get(element_id) if isinstance(element_id, str) else None
+            if definition is None:
+                continue
+            entry = {"id": element_id, "label": definition["label"],
+                     "kind": definition["kind"], "parent": definition["parent"]}
+            for field in fields:
+                value = item.get(field)
+                if field in {"bbox", "default_bbox"}:
+                    if (isinstance(value, (list, tuple)) and len(value) == 4
+                            and all(type(coordinate) is int for coordinate in value)):
+                        entry[field] = list(value)
+                    else:
+                        entry[field] = None
+                elif type(value) is int:
+                    entry[field] = value
+                else:
+                    entry[field] = None
+            visible = item.get("visible")
+            entry["visible"] = visible if type(visible) is bool else True
+            for field in style_fields:
+                value = item.get(field)
+                if field in {"default_color", "color"}:
+                    entry[field] = value.upper() if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) else None
+                elif field in {"default_bold", "bold", "default_italic", "italic"}:
+                    entry[field] = value if type(value) is bool else None
+                elif field in {"default_font_family", "font_family"}:
+                    entry[field] = value if (value == "" or is_font_family_id(value)) else None
+            safe_scene.append(entry)
+            if len(safe_scene) > len(ELEMENT_DEFINITIONS):
+                raise ValueError("too many scene elements")
+        return safe_scene
 
     def import_ui(self, value: dict) -> dict:
         with self.settings_lock:
@@ -493,6 +566,9 @@ def handler(dashboard: Dashboard):
             elif path == "/api/ui":
                 self.send_data(200, "application/json; charset=utf-8",
                                json.dumps(dashboard.ui_catalogue(), ensure_ascii=False).encode("utf-8"))
+            elif path == "/api/ui/fonts":
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps({"fonts": font_catalogue()}, ensure_ascii=False).encode("utf-8"))
             elif path in {"/api/ui/export", "/api/ui/preview"}:
                 ui_id = parse_qs(urlsplit(self.path).query).get("id", [dashboard.ui_id])[0]
                 if not dashboard.ui_profiles.contains(ui_id):
@@ -528,7 +604,7 @@ def handler(dashboard: Dashboard):
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                limit = 65536 + 4096 if self.path == "/api/ui/import" else 4096
+                limit = 65536 + 4096 if self.path in {"/api/ui/import", "/api/ui/editor/preview"} else 4096
                 if length < 0 or length > limit:
                     raise ValueError("Body too large")
                 data = json.loads(self.rfile.read(length) or b"{}")
@@ -570,6 +646,20 @@ def handler(dashboard: Dashboard):
                     return
                 self.send_data(200, "application/json; charset=utf-8",
                                json.dumps({"ok": True, "ui": catalogue}, ensure_ascii=False).encode("utf-8"))
+            elif self.path == "/api/ui/editor/preview" and isinstance(data, dict):
+                try:
+                    if set(data) != {"profile"}:
+                        raise ValueError("请提交一个 UI 样式草稿")
+                    result = dashboard.ui_editor_preview(data["profile"])
+                except ValueError as exc:
+                    self.send_data(400, "application/json; charset=utf-8",
+                                   json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8"))
+                    return
+                except Exception:
+                    self.send_data(500, "application/json; charset=utf-8", b'{"error":"UI preview render failed"}')
+                    return
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"))
             elif self.path == "/api/show":
                 from .desktop import request_show
                 shown = request_show()

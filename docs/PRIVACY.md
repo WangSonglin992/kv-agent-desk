@@ -32,7 +32,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | 文件 | 保存内容 |
 | --- | --- |
 | `settings.json` | 显示方向、软件亮度、USB 开关、自启和无 5 小时额度的手动显示偏好。 |
-| `ui-profiles/*.json` | 用户导入且通过校验的界面样式，包含配色、布局、字号等外观参数。 |
+| `ui-profiles/*.json` | 用户保存或导入且通过校验的界面样式，包含配色、元素位置、字号、字体 ID、粗斜体等外观参数；不包含显示内容或数据绑定。 |
 | `last-frame-meta.json` | 最近画面对应的 UI 标识和样式校验摘要，避免恢复不匹配的外观。 |
 | `last-good.json` | 最近可信 Agent 状态、项目标识、任务计数、Token 汇总、订阅额度及其时间戳。Antigravity 只保存状态/计数和数值用量，不保存任务或 cascade ID、标题、提示词、消息正文或 CSRF。 |
 | `accounts-last-good.json` | 两个 DeepSeek 槽位的最近余额、币种、更新时间和状态；不含 API Key。 |
@@ -41,6 +41,8 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | `dashboard.log` | 轮转日志，用于本机故障诊断。 |
 
 开机恢复功能会先显示 `last-frame.png`，再开始刷新数据。注意，截图本身可能包含账户余额和用量；分享截图、缓存或日志前请先检查其内容。删除这些文件即可清除对应的本地状态；删除 `settings.json` 会恢复默认设置。
+
+布局编辑器的草稿预览仅在本机内存中使用当前画面的副本，不触发额外账户查询、配置保存或 USB 输出。元素选框清单只含固定标识、标签、几何和样式属性，不回传真实显示内容。字体目录仅列出本机字体名称与不透明 ID；模板不含字体文件或本机文件路径，也不会下载字体。
 
 ## 用户可控制的选项
 
