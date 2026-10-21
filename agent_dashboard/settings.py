@@ -9,6 +9,7 @@ settings file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
@@ -83,6 +84,9 @@ class AppSettings:
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path is not None else None
         self._memory = DEFAULT_SETTINGS.copy()
+        self._has_loaded = False
+        self.last_read_status = "ready" if self.path is None else "unread"
+        self._last_failure = None
 
     def get(self) -> dict[str, Any]:
         if self.path is None:
@@ -90,9 +94,23 @@ class AppSettings:
         try:
             with self.path.open("r", encoding="utf-8") as handle:
                 value = json.load(handle)
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return DEFAULT_SETTINGS.copy()
-        return _settings_from_json(value)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            self.last_read_status = ("missing" if isinstance(exc, FileNotFoundError) else
+                                     "unavailable" if isinstance(exc, OSError) else "invalid")
+            failure = (type(exc).__name__, getattr(exc, "errno", None))
+            if failure != self._last_failure and not isinstance(exc, FileNotFoundError):
+                logging.getLogger(__name__).warning("Saved settings unavailable (%s, errno=%s); retaining last values",
+                                                    *failure)
+            self._last_failure = failure
+            return self._memory.copy()
+        if not isinstance(value, dict):
+            self.last_read_status = "invalid"
+            return self._memory.copy()
+        self._memory = _settings_from_json(value)
+        self._has_loaded = True
+        self.last_read_status = "ready"
+        self._last_failure = None
+        return self._memory.copy()
 
     def update(self, fields: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(fields, dict):
@@ -104,11 +122,17 @@ class AppSettings:
             validated[name] = _validate_setting(name, value)
 
         current = self.get()
+        if self.path is not None and self.last_read_status != "ready":
+            if self.last_read_status != "missing" or self._has_loaded:
+                raise OSError("Saved settings are not readable; retry before saving changes")
         current.update(validated)
         if self.path is None:
             self._memory = current
         else:
             self._atomic_write(current)
+            self._memory = current.copy()
+            self._has_loaded = True
+            self.last_read_status = "ready"
         return current.copy()
 
     def _atomic_write(self, value: dict[str, Any]) -> None:
@@ -145,9 +169,9 @@ def _registry_module():
 
 
 def _validated_autostart_command(command: list[str]) -> list[str]:
-    if not isinstance(command, list) or len(command) != 2:
-        raise ValueError("command must be [absolute_frozen_exe_path, '--background']")
-    exe, flag = command
+    if not isinstance(command, list) or len(command) not in (2, 4):
+        raise ValueError("command must contain a fixed executable, background flag and optional state directory")
+    exe, flag = command[:2]
     if not isinstance(exe, str) or any(c in exe for c in "\0\r\n"):
         raise ValueError("command executable path is invalid")
     win_path = PureWindowsPath(exe)
@@ -155,15 +179,20 @@ def _validated_autostart_command(command: list[str]) -> list[str]:
         raise ValueError("command must start with an absolute .exe path")
     if flag != "--background":
         raise ValueError("the only supported startup argument is --background")
-    return [exe, flag]
+    if len(command) == 4:
+        option, state_dir = command[2:]
+        if (option != "--state-dir" or not isinstance(state_dir, str)
+                or any(c in state_dir for c in "\0\r\n") or not PureWindowsPath(state_dir).is_absolute()):
+            raise ValueError("startup state directory must be an absolute local path")
+    return command.copy()
 
 
 def set_autostart(enabled: bool, command: list[str]) -> None:
     """Set the current user's KVAgentDesk Run value.
 
     For safety, enabling accepts only the frozen executable path and the
-    fixed ``--background`` argument; requests cannot provide arbitrary command
-    text.  Registry access is intentionally isolated here for easy mocking.
+    fixed ``--background`` flag and optional absolute ``--state-dir``; requests
+    cannot provide arbitrary command text. Registry access is isolated for tests.
     """
     if type(enabled) is not bool:
         raise ValueError("enabled must be a boolean")

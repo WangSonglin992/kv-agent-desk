@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date, datetime
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -18,18 +19,38 @@ class SubscriptionProfiles:
         self.path = path
         self.lock = threading.RLock()
         self.values: dict[str, dict] = {}
-        if path and path.is_file():
+        self.last_read_status = "ready" if path is None else "unread"
+        self._last_failure = None
+        self.reload()
+
+    def reload(self) -> bool:
+        """Retry local metadata without discarding values after a failed read."""
+        if self.path is None:
+            return True
+        with self.lock:
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                profiles = data.get("profiles", {}) if isinstance(data, dict) else {}
-                if isinstance(profiles, dict):
-                    for provider in PROVIDERS:
-                        try:
-                            self.values[provider] = self.validate(profiles.get(provider, {}))
-                        except ValueError:
-                            pass
-            except (OSError, ValueError, TypeError):
-                pass
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict) or not isinstance(data.get("profiles", {}), dict):
+                    raise ValueError("invalid saved subscription metadata")
+                profiles = data.get("profiles", {})
+                updated = {}
+                for provider in PROVIDERS:
+                    try:
+                        updated[provider] = self.validate(profiles.get(provider, {}))
+                    except ValueError:
+                        updated[provider] = deepcopy(self.values.get(provider, {}))
+            except (OSError, ValueError, TypeError) as exc:
+                self.last_read_status = ("missing" if isinstance(exc, FileNotFoundError) else
+                                         "unavailable" if isinstance(exc, OSError) else "invalid")
+                failure = (type(exc).__name__, getattr(exc, "errno", None))
+                if failure != self._last_failure and not isinstance(exc, FileNotFoundError):
+                    logging.getLogger(__name__).warning("Saved subscription metadata unavailable (%s, errno=%s)", *failure)
+                self._last_failure = failure
+                return False
+            self.values = updated
+            self.last_read_status = "ready"
+            self._last_failure = None
+            return True
 
     @staticmethod
     def validate(value: object) -> dict[str, str]:
@@ -65,6 +86,10 @@ class SubscriptionProfiles:
             raise ValueError("未知订阅来源")
         profile = self.validate(value)
         with self.lock:
+            if self.path is not None:
+                self.reload()
+                if self.last_read_status not in {"ready", "missing"}:
+                    raise OSError("Saved subscription metadata is not readable; retry before saving changes")
             updated = deepcopy(self.values)
             updated[provider] = profile
             if self.path is not None:
@@ -74,6 +99,7 @@ class SubscriptionProfiles:
                                      encoding="utf-8")
                 os.replace(temporary, self.path)
             self.values = updated
+            self.last_read_status = "ready"
             return self.get_all()
 
     def apply(self, agent: dict) -> dict:

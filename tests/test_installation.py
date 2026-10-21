@@ -22,7 +22,7 @@ class InstallationTests(unittest.TestCase):
             source = local / "dist" / "KV-Agent-Desk.exe"
             source.parent.mkdir()
             source.write_bytes(b"same name, not installed")
-            with patch.dict(os.environ, {"LOCALAPPDATA": str(local)}):
+            with patch.object(installation, "local_app_data", return_value=local):
                 self.assertEqual(installation.installed_executable(), target)
                 self.assertTrue(installation.is_installed(target))
                 self.assertFalse(installation.is_installed(source))
@@ -52,7 +52,7 @@ class InstallationTests(unittest.TestCase):
                 return True
 
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_handoff_existing_server", side_effect=handoff_after_copy) as handoff,
                 patch.object(installation, "ensure_desktop_shortcut") as shortcut,
@@ -96,7 +96,7 @@ class InstallationTests(unittest.TestCase):
                 return True
 
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_handoff_existing_server", side_effect=graceful_stop) as handoff,
                 patch.object(installation, "ensure_desktop_shortcut") as shortcut,
@@ -122,7 +122,7 @@ class InstallationTests(unittest.TestCase):
             source.write_bytes(target.read_bytes())
             before_hash = hashlib.sha256(target.read_bytes()).hexdigest()
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_read_server_state", return_value={
                     "app": APP_ID, "version": __version__, "updates": {"supported": True}}),
@@ -152,7 +152,7 @@ class InstallationTests(unittest.TestCase):
             source = root / "candidate.exe"
             source.write_bytes(target.read_bytes())
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_read_server_state", return_value=None),
                 patch.object(installation, "ensure_desktop_shortcut"),
@@ -175,7 +175,7 @@ class InstallationTests(unittest.TestCase):
             source = root / "candidate.exe"
             source.write_bytes(target.read_bytes())
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_read_server_state", return_value={"app": APP_ID, "version": "0.5.0"}),
                 patch.object(installation, "ensure_desktop_shortcut"),
@@ -199,7 +199,7 @@ class InstallationTests(unittest.TestCase):
             source.write_bytes(target.read_bytes())
             state = {"app": APP_ID, "version": __version__, "updates": {"supported": False}}
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_read_server_state", return_value=state),
                 patch.object(installation, "ensure_desktop_shortcut"),
@@ -244,7 +244,7 @@ class InstallationTests(unittest.TestCase):
             source = root / "new.exe"
             source.write_bytes(b"new candidate exe")
             with (
-                patch.dict(os.environ, {"LOCALAPPDATA": str(local)}),
+                patch.object(installation, "local_app_data", return_value=local),
                 patch.object(installation, "_is_windows", return_value=True),
                 patch.object(installation, "_REPLACE_TIMEOUT_SECONDS", 0.0),
                 patch.object(installation, "_handoff_existing_server", return_value=True) as handoff,

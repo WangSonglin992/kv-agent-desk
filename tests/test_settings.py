@@ -61,6 +61,30 @@ class _FakeRegistry:
 
 
 class AppSettingsTests(unittest.TestCase):
+    def test_temporary_read_failure_retains_values_and_cannot_overwrite_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            settings = AppSettings(path)
+            settings.update({"brightness": 39, "ui_id": "saved_layout"})
+            original = path.read_bytes()
+            with patch.object(Path, "open", side_effect=PermissionError(13, "synthetic failure")):
+                self.assertEqual(settings.get()["ui_id"], "saved_layout")
+                self.assertEqual(settings.last_read_status, "unavailable")
+                with self.assertRaises(OSError):
+                    settings.update({"brightness": 40})
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(settings.get()["brightness"], 39)
+            self.assertEqual(settings.last_read_status, "ready")
+
+    def test_invalid_file_is_not_overwritten_by_a_default_based_update(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_bytes(b'{ damaged configuration')
+            settings = AppSettings(path)
+            with self.assertRaises(OSError):
+                settings.update({"ui_id": "classic"})
+            self.assertEqual(path.read_bytes(), b'{ damaged configuration')
+
     def test_defaults_and_memory_updates(self):
         settings = AppSettings()
         self.assertEqual(settings.get(), DEFAULT_SETTINGS)
@@ -146,6 +170,16 @@ class AppSettingsTests(unittest.TestCase):
 
 
 class AutoStartTests(unittest.TestCase):
+    def test_pinned_state_directory_is_quoted_and_validated(self):
+        command = [r"C:\Program Files\KV Agent Desk\app.exe", "--background", "--state-dir", r"C:\Private\data with spaces"]
+        set_autostart(True, command)
+        value = self.registry.values[(self.registry.HKEY_CURRENT_USER,
+                                     r"Software\Microsoft\Windows\CurrentVersion\Run")]
+        self.assertEqual(value[2], subprocess.list2cmdline(command))
+        for invalid in (command[:3] + ["relative"], command[:2] + ["--another-flag", command[3]]):
+            with self.assertRaises(ValueError):
+                set_autostart(True, invalid)
+
     def setUp(self):
         self.registry = _FakeRegistry()
         self.platform = patch.object(settings_module, "_is_windows", return_value=True)

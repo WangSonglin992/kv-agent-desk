@@ -35,6 +35,7 @@ from .retention import LastGoodStore
 from .subscriptions import SubscriptionProfiles
 from .accounts.monitor import AccountMonitor
 from .settings import AppSettings, get_autostart, set_autostart
+from .paths import local_app_data
 from .web import PAGE
 from .ui_profiles import UIProfiles
 from .ui_elements import ELEMENT_DEFINITIONS
@@ -84,15 +85,16 @@ def display_data(agent: dict) -> dict:
     return {key: deepcopy(value) for key, value in agent.items() if key in allowed}
 
 
-def startup_command() -> list[str]:
+def startup_command(state_dir: Path | None = None) -> list[str]:
     executable = Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1] / "dist" / "KV-Agent-Desk.exe"
     if not executable.is_file():
         raise ValueError("请先构建 Windows 应用，再启用开机自启")
-    return [str(executable.resolve()), "--background"]
+    directory = state_directory() if state_dir is None else state_dir
+    return [str(executable.resolve()), "--background", "--state-dir", str(directory.resolve())]
 
 
 def state_directory() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "KV-Agent-Desk"
+    return local_app_data() / "KV-Agent-Desk"
 
 
 def empty_agent(provider: str, name: str, detail: str = "正在读取本机会话") -> dict:
@@ -138,9 +140,11 @@ class Dashboard:
         self.settings = AppSettings(None if args.demo else args.state_dir / "settings.json")
         prefs = self.settings.get()
         self.ui_profiles = UIProfiles(None if args.demo else args.state_dir / "ui-profiles")
-        if not self.ui_profiles.contains(prefs["ui_id"]):
-            prefs = self.settings.update({"ui_id": "classic"})
-        self.ui_id = prefs["ui_id"]
+        self.ui_id = prefs["ui_id"] if self.ui_profiles.contains(prefs["ui_id"]) else "classic"
+        # A temporary startup read failure must never replace the saved choice.
+        self._configuration_pending = not args.demo
+        self._next_configuration_retry = 0.0
+        self._startup_registration_pending = not args.demo
         self.ui_preview_cache: dict[str, bytes] = {}
         overrides = {key: getattr(args, key) for key in ("rotation", "lcd_height") if getattr(args, key, None) is not None}
         if overrides:
@@ -209,12 +213,12 @@ class Dashboard:
             if "auto_start" in fields:
                 if type(fields["auto_start"]) is not bool:
                     raise ValueError("开机自启应为开关值")
-                set_autostart(fields["auto_start"], startup_command())
+                set_autostart(fields["auto_start"], startup_command(self.args.state_dir))
             try:
                 prefs = self.settings.update(fields)
             except Exception:
                 if "auto_start" in fields:
-                    set_autostart(previous["auto_start"], startup_command())
+                    set_autostart(previous["auto_start"], startup_command(self.args.state_dir))
                 raise
             with self.lock:
                 self.usb_enabled = prefs["usb_enabled"] and not self.args.demo and not self.args.preview_only
@@ -232,6 +236,55 @@ class Dashboard:
 
     def current_profile(self) -> dict:
         return self.ui_profiles.get(self.ui_id)
+
+    def restore_startup_registration(self) -> bool:
+        if not self._startup_registration_pending:
+            return True
+        if not self.desktop_mode or self.args.demo or getattr(self.args, "portable", False):
+            self._startup_registration_pending = False
+            return True
+        with self.settings_lock:
+            prefs = self.settings.get()
+            # Foreground first launch keeps the default opt-out behavior. A
+            # login-time background launch must not change Run using defaults.
+            fresh_foreground = self.settings.last_read_status == "missing" and not self.args.background
+            if self.settings.last_read_status != "ready" and not fresh_foreground:
+                return False
+            try:
+                set_autostart(prefs["auto_start"], startup_command(self.args.state_dir))
+            except (OSError, NotImplementedError, ValueError) as exc:
+                logging.warning("Startup registration could not be restored (%s)", type(exc).__name__)
+                return False
+            self._startup_registration_pending = False
+            return True
+
+    def retry_saved_configuration(self, *, force: bool = False) -> bool:
+        """Recover saved preferences/styles if the login-time read was too early."""
+        if self.args.demo or not self._configuration_pending:
+            return False
+        now = time.monotonic()
+        if not force and now < self._next_configuration_retry:
+            return False
+        self._next_configuration_retry = now + 5.0
+        with self.settings_lock:
+            prefs = self.settings.get()
+            metadata_ready = self.profiles.reload()
+            if self.settings.last_read_status != "ready" or not self.ui_profiles.contains(prefs["ui_id"]):
+                return False
+            with self.lock:
+                self.ui_id = prefs["ui_id"]
+                self.usb_enabled = prefs["usb_enabled"] and not self.args.demo and not self.args.preview_only
+                self.rotation = getattr(self.args, "rotation", None)
+                if self.rotation is None:
+                    self.rotation = prefs["rotation"]
+                self.lcd_height = getattr(self.args, "lcd_height", None) or prefs["lcd_height"]
+                self.brightness = prefs["brightness"]
+                self.snapshot["usb_enabled"] = self.usb_enabled
+            startup_ready = self.restore_startup_registration()
+            self._configuration_pending = not metadata_ready or not startup_ready
+            if not self._configuration_pending:
+                logging.info("Saved local configuration restored")
+            return True
 
     def configure_updates(self) -> None:
         if not _default_native_install_mode(self.args):
@@ -533,6 +586,7 @@ class Dashboard:
 
     def run(self) -> None:
         try:
+            self.retry_saved_configuration(force=True)
             self.restore_frame()
             if self.updates is not None:
                 self.updates.start()
@@ -540,6 +594,7 @@ class Dashboard:
             updater.start()
             while not self.stop.is_set():
                 started = time.monotonic()
+                self.retry_saved_configuration()
                 with self.lock:
                     agents = deepcopy(self.latest_agents)
                 self.tick(agents)
@@ -894,10 +949,7 @@ def main(argv: list[str] | None = None) -> int:
                     dashboard.stop.wait(.1)
             threading.Thread(target=show_pending, daemon=True, name="desktop-show-requests").start()
             if not args.demo and not args.portable:
-                try:
-                    set_autostart(dashboard.settings.get()["auto_start"], startup_command())
-                except (OSError, NotImplementedError, ValueError):
-                    logging.exception("Could not configure current-user startup")
+                dashboard.restore_startup_registration()
             http_thread = threading.Thread(target=serve, daemon=True, name="dashboard-http")
             http_thread.start()
             run_desktop(url, dashboard.stop, background=args.background, on_usb_toggle=dashboard.toggle_usb)

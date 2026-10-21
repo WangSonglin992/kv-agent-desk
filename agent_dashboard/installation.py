@@ -14,6 +14,8 @@ import tempfile
 import time
 import urllib.request
 
+from .paths import local_app_data
+
 
 _PRODUCT_DIR = Path("Programs") / "KV-Agent-Desk"
 _EXECUTABLE_NAME = "KV-Agent-Desk.exe"
@@ -54,8 +56,7 @@ def _is_windows() -> bool:
 
 def installed_executable() -> Path:
     """Return the fixed per-user installation target."""
-    local_app_data = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
-    return local_app_data / _PRODUCT_DIR / _EXECUTABLE_NAME
+    return local_app_data() / _PRODUCT_DIR / _EXECUTABLE_NAME
 
 
 def is_installed(exe: Path) -> bool:

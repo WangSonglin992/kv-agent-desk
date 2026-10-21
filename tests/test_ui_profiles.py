@@ -1,4 +1,6 @@
 import json
+import errno
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -304,6 +306,88 @@ class UIProfilesTests(unittest.TestCase):
             store = UIProfiles(directory)
             self.assertFalse(store.contains("large-theme"))
             self.assertEqual(store.get("large-theme"), BUILTIN_PROFILES["classic"])
+
+    def test_transient_profile_read_error_uses_last_good_and_recovers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "ui-profiles"
+            store = UIProfiles(directory)
+            original = store.import_profile(sample_profile("cached-theme", name="Synthetic Cached"))
+            path = directory / "cached-theme.json"
+
+            denied = PermissionError(errno.EACCES, "access denied", str(path))
+            with self.assertLogs("agent_dashboard.ui_profiles", level="WARNING") as captured:
+                with patch("pathlib.Path.read_bytes", side_effect=denied):
+                    self.assertEqual(store.get("cached-theme"), original)
+                    self.assertTrue(store.contains("cached-theme"))
+                    self.assertIn("cached-theme", [item["id"] for item in store.list()])
+
+            self.assertEqual(len(captured.records), 1)
+            log_text = captured.output[0]
+            self.assertIn("PermissionError", log_text)
+            self.assertIn(str(errno.EACCES), log_text)
+            self.assertNotIn(str(path), log_text)
+            self.assertNotIn("Synthetic Cached", log_text)
+
+            replacement = sample_profile("cached-theme", name="Synthetic Recovered", layout="paper")
+            path.write_text(json.dumps(replacement), encoding="utf-8")
+            self.assertEqual(store.get("cached-theme")["name"], "Synthetic Recovered")
+            self.assertEqual(store.get("cached-theme")["layout"], "paper")
+
+    def test_profile_directory_scan_error_uses_cached_profiles_and_logs_safely(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "ui-profiles"
+            store = UIProfiles(directory)
+            profile = store.import_profile(sample_profile("scan-theme", name="Synthetic Scan"))
+            read_denied = PermissionError(errno.EACCES, "access denied", str(directory / "scan-theme.json"))
+            scan_denied = PermissionError(errno.EACCES, "access denied", str(directory))
+
+            with self.assertLogs("agent_dashboard.ui_profiles", level="WARNING") as captured:
+                with patch("pathlib.Path.read_bytes", side_effect=read_denied):
+                    self.assertEqual(store.get("scan-theme"), profile)
+                with patch("agent_dashboard.ui_profiles.os.scandir", side_effect=scan_denied):
+                    listed = store.list()
+
+            self.assertIn("scan-theme", [item["id"] for item in listed])
+            # The same exception/errno pair is reported once across read and scan paths.
+            self.assertEqual(len(captured.records), 1)
+            self.assertIn("PermissionError", captured.output[0])
+            self.assertNotIn(str(directory), captured.output[0])
+            self.assertNotIn(profile["name"], captured.output[0])
+
+            self.assertIn("scan-theme", [item["id"] for item in store.list()])
+
+    def test_invalid_or_missing_file_does_not_use_last_good_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "ui-profiles"
+            store = UIProfiles(directory)
+            store.import_profile(sample_profile("invalid-after-cache", name="Synthetic Cached"))
+            path = directory / "invalid-after-cache.json"
+
+            path.write_text('{"schema_version":1,"unknown":true}', encoding="utf-8")
+            self.assertFalse(store.contains("invalid-after-cache"))
+            self.assertEqual(store.get("invalid-after-cache"), BUILTIN_PROFILES["classic"])
+
+            # A later absent path must also stay unavailable despite the old cache.
+            path.unlink()
+            self.assertFalse(store.contains("invalid-after-cache"))
+            self.assertEqual(store.get("invalid-after-cache"), BUILTIN_PROFILES["classic"])
+
+    def test_symlinked_profile_is_not_recovered_from_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder) / "ui-profiles"
+            store = UIProfiles(directory)
+            store.import_profile(sample_profile("linked-theme"))
+            target = Path(folder) / "target.json"
+            target.write_text(json.dumps(sample_profile("linked-theme")), encoding="utf-8")
+            path = directory / "linked-theme.json"
+            path.unlink()
+            try:
+                os.symlink(target, path)
+            except (OSError, NotImplementedError):
+                self.skipTest("symlink creation is not available")
+
+            self.assertFalse(store.contains("linked-theme"))
+            self.assertEqual(store.get("linked-theme"), BUILTIN_PROFILES["classic"])
 
 
 if __name__ == "__main__":

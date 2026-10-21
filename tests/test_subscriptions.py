@@ -1,11 +1,28 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from agent_dashboard.subscriptions import SubscriptionProfiles
 
 
 class SubscriptionProfileTests(unittest.TestCase):
+    def test_retry_loads_delayed_metadata_and_retains_it_during_read_failures(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "subscriptions.json"
+            profiles = SubscriptionProfiles(path)
+            self.assertFalse(profiles.reload())
+            SubscriptionProfiles(path).update("codex", {"plan_name": "Synthetic saved plan"})
+            self.assertTrue(profiles.reload())
+            self.assertEqual(profiles.get_all()["codex"]["plan_name"], "Synthetic saved plan")
+            original = path.read_bytes()
+            with patch.object(Path, "read_text", side_effect=PermissionError(13, "synthetic failure")):
+                self.assertFalse(profiles.reload())
+                self.assertEqual(profiles.get_all()["codex"]["plan_name"], "Synthetic saved plan")
+                with self.assertRaises(OSError):
+                    profiles.update("zcode", {})
+            self.assertEqual(path.read_bytes(), original)
+
     def test_partial_manual_fields_override_only_those_fields_and_survive_restart(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "subscriptions.json"

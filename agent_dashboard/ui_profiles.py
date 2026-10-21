@@ -7,15 +7,21 @@ assets, file paths, URLs, templates, markup, or executable code.
 from __future__ import annotations
 
 from copy import deepcopy
+import errno
 import json
+import logging
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import threading
 from typing import Any
 
 from .ui_elements import ELEMENT_DEFINITIONS
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 SCHEMA_VERSION = 1
@@ -167,6 +173,8 @@ class UIProfiles:
     def __init__(self, directory: Path | str | None = None):
         self.directory = Path(directory) if directory is not None else None
         self._memory: dict[str, dict[str, Any]] = {}
+        self._loaded_cache: dict[str, dict[str, Any]] = {}
+        self._logged_io_failures: set[tuple[str, int | None]] = set()
         self._lock = threading.RLock()
 
     def list(self) -> list[dict[str, Any]]:
@@ -209,6 +217,7 @@ class UIProfiles:
                 self._memory[profile_id] = deepcopy(normalized)
             else:
                 self._write_custom(normalized)
+                self._loaded_cache[profile_id] = deepcopy(normalized)
             return deepcopy(normalized)
 
     def export(self, profile_id: str) -> dict[str, Any]:
@@ -334,10 +343,39 @@ class UIProfiles:
             return deepcopy(profile) if profile is not None else None
         path = self.directory / f"{profile_id}.json"
         try:
-            if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_PROFILE_BYTES:
+            directory_info = self.directory.lstat()
+            if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
+                self._loaded_cache.pop(profile_id, None)
+                return None
+        except FileNotFoundError:
+            self._loaded_cache.pop(profile_id, None)
+            return None
+        except OSError as exc:
+            self._log_io_failure("profile directory stat", exc)
+            return self._cached_profile(profile_id)
+
+        try:
+            file_info = path.lstat()
+            if stat.S_ISLNK(file_info.st_mode) or not stat.S_ISREG(file_info.st_mode):
+                self._loaded_cache.pop(profile_id, None)
+                return None
+            if file_info.st_size > MAX_PROFILE_BYTES:
+                self._loaded_cache.pop(profile_id, None)
                 return None
             raw = path.read_bytes()
+        except FileNotFoundError:
+            self._loaded_cache.pop(profile_id, None)
+            return None
+        except OSError as exc:
+            if exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+                self._loaded_cache.pop(profile_id, None)
+                return None
+            self._log_io_failure("profile read", exc)
+            return self._cached_profile(profile_id)
+
+        try:
             if len(raw) > MAX_PROFILE_BYTES:
+                self._loaded_cache.pop(profile_id, None)
                 return None
             decoded = raw.decode("utf-8", errors="strict")
             payload = json.loads(
@@ -346,10 +384,13 @@ class UIProfiles:
                 parse_constant=_reject_constant,
             )
             normalized = self._normalize(payload)
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+        except (UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+            self._loaded_cache.pop(profile_id, None)
             return None
         if normalized["id"] != profile_id or profile_id in BUILTIN_PROFILES:
+            self._loaded_cache.pop(profile_id, None)
             return None
+        self._loaded_cache[profile_id] = deepcopy(normalized)
         return normalized
 
     def _custom_profiles(self) -> dict[str, dict[str, Any]]:
@@ -357,12 +398,33 @@ class UIProfiles:
             candidates = self._memory.items()
         else:
             try:
-                if self.directory.is_symlink() or not self.directory.is_dir():
+                directory_info = self.directory.lstat()
+                if stat.S_ISLNK(directory_info.st_mode) or not stat.S_ISDIR(directory_info.st_mode):
                     return {}
-                filenames = sorted(self.directory.glob("*.json"), key=lambda item: item.name)
-            except OSError:
+            except FileNotFoundError:
+                self._loaded_cache.clear()
                 return {}
-            candidates = ((path.stem, None) for path in filenames)
+            except OSError as exc:
+                self._log_io_failure("profile directory stat", exc)
+                return self._cached_profiles()
+
+            try:
+                with os.scandir(self.directory) as entries:
+                    filenames = sorted(
+                        (entry.name for entry in entries if entry.name.endswith(".json")),
+                        key=str.casefold,
+                    )
+            except OSError as exc:
+                if exc.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+                    self._loaded_cache.clear()
+                    return {}
+                self._log_io_failure("profile directory scan", exc)
+                return self._cached_profiles()
+            profile_ids = {Path(filename).stem for filename in filenames}
+            for cached_id in tuple(self._loaded_cache):
+                if cached_id not in profile_ids:
+                    self._loaded_cache.pop(cached_id, None)
+            candidates = ((Path(filename).stem, None) for filename in filenames)
 
         profiles: dict[str, dict[str, Any]] = {}
         for profile_id, memory_profile in candidates:
@@ -376,6 +438,31 @@ class UIProfiles:
             if len(profiles) >= MAX_CUSTOM_PROFILES:
                 break
         return dict(sorted(profiles.items(), key=lambda item: (item[1]["name"].casefold(), item[0])))
+
+    def _cached_profile(self, profile_id: str) -> dict[str, Any] | None:
+        profile = self._loaded_cache.get(profile_id)
+        return deepcopy(profile) if profile is not None else None
+
+    def _cached_profiles(self) -> dict[str, dict[str, Any]]:
+        cached = {
+            profile_id: deepcopy(profile)
+            for profile_id, profile in self._loaded_cache.items()
+            if profile_id not in BUILTIN_PROFILES and _PROFILE_ID.fullmatch(profile_id)
+        }
+        return dict(sorted(cached.items(), key=lambda item: (item[1]["name"].casefold(), item[0])))
+
+    def _log_io_failure(self, operation: str, exc: OSError) -> None:
+        error_number = exc.errno if type(exc.errno) is int else None
+        key = (type(exc).__name__, error_number)
+        if key in self._logged_io_failures:
+            return
+        self._logged_io_failures.add(key)
+        _LOGGER.warning(
+            "UI profile storage I/O failure during %s (%s, errno=%s)",
+            operation,
+            type(exc).__name__,
+            error_number,
+        )
 
     def _write_custom(self, profile: dict[str, Any]) -> None:
         assert self.directory is not None
