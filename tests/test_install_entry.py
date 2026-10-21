@@ -8,6 +8,33 @@ from agent_dashboard.app import Dashboard, parser
 
 
 class InstallationEntryTests(unittest.TestCase):
+    def test_legacy_shortcut_and_run_directories_migrate_to_shared_user_store(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            legacy = root / "appdata" / "KV-Agent-Desk"
+            destination = root / "profile" / ".kv-agent-desk"
+            args = parser().parse_args(["--background", "--state-dir", str(legacy)])
+            with patch.object(app_module.sys, "platform", "win32"), \
+                    patch.object(app_module, "state_directory", return_value=destination), \
+                    patch.object(app_module, "legacy_state_directories", return_value=[legacy]), \
+                    patch("agent_dashboard.storage_migration.migrate_legacy_state") as migrate:
+                app_module._prepare_state_directory(args)
+            migrate.assert_called_once_with(destination, [legacy])
+            self.assertEqual(args.state_dir, destination)
+
+    def test_custom_and_demo_directories_are_not_migrated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for flags in ([], ["--demo"], ["--portable"]):
+                args = parser().parse_args([*flags, "--state-dir", str(root / "custom")])
+                with patch.object(app_module.sys, "platform", "win32"), \
+                        patch.object(app_module, "state_directory", return_value=root / "canonical"), \
+                        patch.object(app_module, "legacy_state_directories", return_value=[root / "legacy"]), \
+                        patch("agent_dashboard.storage_migration.migrate_legacy_state") as migrate:
+                    app_module._prepare_state_directory(args)
+                migrate.assert_not_called()
+                self.assertEqual(args.state_dir, root / "custom")
+
     def test_explicit_install_cannot_silently_switch_a_custom_data_directory(self):
         with tempfile.TemporaryDirectory() as folder:
             args = parser().parse_args(["--install", "--state-dir", folder])

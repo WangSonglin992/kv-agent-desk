@@ -89,4 +89,57 @@ def local_app_data() -> Path:
     return Path.home() / "AppData" / "Local"
 
 
-__all__ = ["local_app_data"]
+def user_state_directory() -> Path:
+    """Return the canonical per-user state directory without creating it.
+
+    Windows uses the user's home directory so packaged-app LocalAppData
+    virtualization cannot split the dashboard's settings from its data.
+    Other platforms preserve the existing LocalAppData-based location.
+    """
+    if _is_windows():
+        home = Path.home()
+        if not home.is_absolute():
+            raise OSError("user home directory is not absolute")
+        return home / ".kv-agent-desk"
+    return local_app_data() / "KV-Agent-Desk"
+
+
+def legacy_state_directories() -> list[Path]:
+    """List current-user legacy state roots, without reading or creating files.
+
+    The ordinary LocalAppData root is kept first even when absent. Package
+    LocalCache candidates are included only when that exact dashboard folder
+    currently exists under a current-user ``OpenAI.Codex_*`` package folder.
+    """
+    base = local_app_data()
+    candidates = [base / "KV-Agent-Desk"]
+    packages = base / "Packages"
+    try:
+        package_directories = sorted(
+            (path for path in packages.glob("OpenAI.Codex_*") if path.is_dir()),
+            key=lambda path: path.name.casefold(),
+        )
+    except OSError:
+        package_directories = []
+
+    for package in package_directories:
+        candidate = package / "LocalCache" / "Local" / "KV-Agent-Desk"
+        try:
+            if candidate.is_dir():
+                candidates.append(candidate)
+        except OSError:
+            # Keep the stable ordinary location; callers may probe candidates
+            # again if package-local access becomes available.
+            continue
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = os.path.normcase(os.path.normpath(str(path)))
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
+__all__ = ["legacy_state_directories", "local_app_data", "user_state_directory"]

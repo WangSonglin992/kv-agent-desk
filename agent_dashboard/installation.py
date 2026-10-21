@@ -14,13 +14,14 @@ import tempfile
 import time
 import urllib.request
 
-from .paths import local_app_data
+from .paths import local_app_data, user_state_directory
 
 
 _PRODUCT_DIR = Path("Programs") / "KV-Agent-Desk"
 _EXECUTABLE_NAME = "KV-Agent-Desk.exe"
 _SHORTCUT_NAME = "KV Agent Desk.lnk"
 _SHORTCUT_TARGET_ENV = "KV_AGENT_DESK_TARGET"
+_SHORTCUT_STATE_ENV = "KV_AGENT_DESK_STATE"
 _SERVER_URL = "http://127.0.0.1:8765"
 _SERVER_STOP_TIMEOUT_SECONDS = 15.0
 _REPLACE_TIMEOUT_SECONDS = 30.0
@@ -31,8 +32,12 @@ $utf8 = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
 $target = $env:KV_AGENT_DESK_TARGET
+$dataDirectory = $env:KV_AGENT_DESK_STATE
 if ([string]::IsNullOrWhiteSpace($target) -or !(Test-Path -LiteralPath $target -PathType Leaf)) {
     exit 2
+}
+if ([string]::IsNullOrWhiteSpace($dataDirectory) -or ![IO.Path]::IsPathRooted($dataDirectory)) {
+    exit 4
 }
 $desktop = [Environment]::GetFolderPath('Desktop')
 if ([string]::IsNullOrWhiteSpace($desktop)) {
@@ -43,7 +48,7 @@ $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($linkPath)
 $shortcut.TargetPath = $target
 $shortcut.WorkingDirectory = [IO.Path]::GetDirectoryName($target)
-$shortcut.Arguments = ''
+$shortcut.Arguments = '--state-dir "' + $dataDirectory + '"'
 $shortcut.IconLocation = "$target,0"
 $shortcut.Save()
 [Console]::Out.WriteLine($linkPath)
@@ -82,6 +87,7 @@ def ensure_desktop_shortcut(exe: Path) -> Path:
     child_env = {
         "SystemRoot": str(system_root),
         _SHORTCUT_TARGET_ENV: str(target),
+        _SHORTCUT_STATE_ENV: str(user_state_directory().resolve()),
     }
     result = subprocess.run(
         [str(powershell), "-NoProfile", "-NonInteractive", "-Command", _SHORTCUT_SCRIPT],

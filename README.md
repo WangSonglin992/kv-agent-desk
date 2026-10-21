@@ -34,9 +34,9 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 
 从 [GitHub Releases](https://github.com/WangSonglin992/kv-agent-desk/releases) 下载 `KV-Agent-Desk-windows-x64.zip`，解压后运行 `KV-Agent-Desk.exe`，无需安装 Python 或管理员权限。程序会安装到 `%LOCALAPPDATA%\Programs\KV-Agent-Desk\KV-Agent-Desk.exe`，并创建桌面的 **KV Agent Desk** 快捷方式；以后从这个固定入口打开。
 
-用户数据仍保存在 `%LOCALAPPDATA%\KV-Agent-Desk`，与程序目录分开。安装和更新前会把 `settings.json`、`subscriptions.json` 及 `ui-profiles/*.json` 的原始文件备份到数据目录下的 `backups/install-*`；不会将内置样式覆盖到自定义副本。
+Windows 用户数据统一保存在 `%USERPROFILE%\.kv-agent-desk`，与程序目录分开，避免打包宿主对 AppData 的重定向。首次升级自动迁移普通 LocalAppData 和 Codex 隔离目录内的旧记录；旧文件保留，迁移前另存备份，已有目标文件不覆盖。安装和更新前还会把 `settings.json`、`subscriptions.json` 及 `ui-profiles/*.json` 的原始文件备份到数据目录下的 `backups/install-*`；不会将内置样式覆盖到自定义副本。
 
-开机自启动会明确传入本机数据目录；Windows 目录位置通过系统接口确认。若登录初期配置或自定义样式暂不可读，程序保留已保存的选择并每 5 秒重试恢复，不把默认样式写回配置文件。
+桌面快捷方式和开机自启动都会明确传入同一本机数据目录。若登录初期配置或自定义样式暂不可读，程序保留已保存的选择并每 5 秒重试恢复，不把默认样式写回配置文件。
 
 已安装版本在启动后后台检查更新，正常间隔为 24 小时，失败时退避重试；可关闭“自动检查并安装更新”，也可主动点击“检查并更新”。更新清单和文件来自本仓库的稳定 Release，EXE 通过 SHA-256 校验后才交接安装，不使用账号登录或 API Key。更新会短暂重启应用，然后恢复上次画面和设置。
 
@@ -87,7 +87,7 @@ dist\KV-Agent-Desk.exe --preview-only
 
 控制页可调整方向、屏幕画面亮度、USB 输出、自启、ChatGPT 5 小时窗口显示策略和套餐资料。默认自动启动仅登记到当前 Windows 用户的 `Run` 项；应用不会创建系统服务或管理员级开机任务。桌面关闭按钮只会隐藏窗口到托盘，托盘“退出”才会停止应用并释放屏幕接口。
 
-运行缓存和设置保存在 `%LOCALAPPDATA%\KV-Agent-Desk`。请阅读 [隐私说明](docs/PRIVACY.md)，尤其是最近会话统计、账户余额、手动套餐信息和屏幕快照的本机保留方式。
+运行缓存和设置保存在 `%USERPROFILE%\.kv-agent-desk`。请阅读 [隐私说明](docs/PRIVACY.md)，尤其是最近会话统计、账户余额、手动套餐信息和屏幕快照的本机保留方式。
 
 控制页还可切换 `classic`、`aurora` 和 `paper` 三种 LCD 界面样式。应用会记住所选样式，并在下次启动时继续使用。样式可通过 JSON 导入或导出，单个文件最大 64 KiB；模板只保存界面样式，不包含账号、密钥、订阅、会话或 Token 使用数据。详见 [界面模板说明](docs/UI-TEMPLATES.md)。
 

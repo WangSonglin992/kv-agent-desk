@@ -35,7 +35,7 @@ from .retention import LastGoodStore
 from .subscriptions import SubscriptionProfiles
 from .accounts.monitor import AccountMonitor
 from .settings import AppSettings, get_autostart, set_autostart
-from .paths import local_app_data
+from .paths import user_state_directory, legacy_state_directories
 from .web import PAGE
 from .ui_profiles import UIProfiles
 from .ui_elements import ELEMENT_DEFINITIONS
@@ -94,7 +94,7 @@ def startup_command(state_dir: Path | None = None) -> list[str]:
 
 
 def state_directory() -> Path:
-    return local_app_data() / "KV-Agent-Desk"
+    return user_state_directory()
 
 
 def empty_agent(provider: str, name: str, detail: str = "正在读取本机会话") -> dict:
@@ -851,6 +851,20 @@ def _default_native_install_mode(args: argparse.Namespace) -> bool:
                 and args.port == 8765 and args.state_dir.resolve() == state_directory().resolve())
 
 
+def _prepare_state_directory(args: argparse.Namespace) -> None:
+    """Migrate the default store out of packaged-host AppData redirection."""
+    if sys.platform != "win32" or args.demo or args.portable or args.port != 8765:
+        return
+    destination = state_directory()
+    legacy = legacy_state_directories()
+    requested = args.state_dir.resolve()
+    if requested != destination.resolve() and requested not in {p.resolve() for p in legacy}:
+        return
+    from .storage_migration import migrate_legacy_state
+    migrate_legacy_state(destination, legacy)
+    args.state_dir = destination
+
+
 def _prepare_installed_launch(args: argparse.Namespace) -> bool:
     """Return True when this invocation handed off to the fixed installed EXE."""
     if args.install and (sys.platform != "win32" or not getattr(sys, "frozen", False)):
@@ -879,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.stop:
         return 0 if existing_server(url, True) else 1
     try:
+        _prepare_state_directory(args)
         if _prepare_installed_launch(args):
             return 0
     except Exception as exc:

@@ -28,7 +28,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 
 ## 保存位置与文件
 
-默认目录为 `%LOCALAPPDATA%\KV-Agent-Desk`。文件均为普通本地文件，不加密，也不会被上传：
+默认目录为 `%USERPROFILE%\.kv-agent-desk`。文件均为普通本地文件，不加密，也不会被上传：
 
 | 文件 | 保存内容 |
 | --- | --- |
@@ -43,8 +43,12 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | `updates.json` | 程序版本、更新检查时间和状态；不包含下载重定向的临时签名 URL、账号或凭据。 |
 | `updates/<版本>/KV-Agent-Desk.exe` | 校验通过的更新程序。 |
 | `backups/install-*` | 安装或更新前原样备份的设置、订阅和自定义布局；仍只在本机保存。 |
+| `migration-backups/*` | 首次迁移前备份的旧版设置、样式和缓存，包含重名冲突文件；旧目录中的原文件保留。 |
+| `.legacy-state-migration-v1.json` | 仅含版本号的一次性迁移完成标记。 |
 
 程序安装目录为 `%LOCALAPPDATA%\Programs\KV-Agent-Desk`。更新只替换这个目录中的 EXE，并修复桌面快捷方式，不清空上述数据目录。
+
+首次迁移只检查当前用户的旧 `%LOCALAPPDATA%\KV-Agent-Desk`，以及 Codex 的 Windows 隔离目录内同名应用目录，复制固定清单中的设置、样式与缓存文件；不扫描其他应用的数据或凭据。迁移完成后使用新的独立目录，现有目标文件不会被覆盖。
 
 开机恢复功能会先显示 `last-frame.png`，再开始刷新数据。注意，截图本身可能包含账户余额和用量；分享截图、缓存或日志前请先检查其内容。退出应用后删除这些文件即可清除对应的本地状态；删除 `settings.json` 后重新启动会恢复默认设置。
 

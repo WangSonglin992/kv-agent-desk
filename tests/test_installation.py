@@ -289,6 +289,7 @@ class InstallationTests(unittest.TestCase):
             completed = SimpleNamespace(returncode=0, stdout=str(link) + "\r\n")
             with (
                 patch.object(installation, "_is_windows", return_value=True),
+                patch.object(installation, "user_state_directory", return_value=root / "saved data"),
                 patch.dict(os.environ, {"SystemRoot": str(root / "Windows")} ),
                 patch.object(installation.subprocess, "run", return_value=completed) as run,
             ):
@@ -306,6 +307,8 @@ class InstallationTests(unittest.TestCase):
             self.assertIn("[IO.Path]::GetDirectoryName($target)", script)
             self.assertNotIn(str(target), script)
             self.assertEqual(kwargs["env"][installation._SHORTCUT_TARGET_ENV], str(target.resolve()))
+            self.assertEqual(kwargs["env"][installation._SHORTCUT_STATE_ENV], str((root / "saved data").resolve()))
+            self.assertIn("$shortcut.Arguments = '--state-dir", script)
             self.assertTrue(kwargs["capture_output"])
             self.assertEqual(kwargs["errors"], "replace")
             self.assertEqual(kwargs["creationflags"], getattr(subprocess, "CREATE_NO_WINDOW", 0))

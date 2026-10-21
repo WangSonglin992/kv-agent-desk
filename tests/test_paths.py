@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agent_dashboard.paths import local_app_data
+from agent_dashboard.paths import legacy_state_directories, local_app_data, user_state_directory
 
 
 class LocalAppDataTests(unittest.TestCase):
@@ -67,6 +67,47 @@ class LocalAppDataTests(unittest.TestCase):
                  patch("agent_dashboard.paths._windows_known_folder_local_app_data", return_value=missing):
                 self.assertEqual(local_app_data(), missing)
             self.assertFalse(missing.exists())
+
+    def test_windows_state_directory_uses_absolute_home_not_localappdata(self):
+        home = Path("C:/SyntheticProfiles/example")
+        with patch("agent_dashboard.paths._is_windows", return_value=True), \
+             patch("agent_dashboard.paths.Path.home", return_value=home), \
+             patch("agent_dashboard.paths.local_app_data", side_effect=AssertionError("unexpected lookup")), \
+             patch.dict(os.environ, {"LOCALAPPDATA": "C:/virtualized/local"}, clear=True):
+            self.assertEqual(user_state_directory(), home / ".kv-agent-desk")
+            self.assertTrue(user_state_directory().is_absolute())
+
+    def test_windows_state_directory_rejects_relative_home_instead_of_using_cwd(self):
+        with patch("agent_dashboard.paths._is_windows", return_value=True), \
+             patch("agent_dashboard.paths.Path.home", return_value=Path("relative-home")):
+            with self.assertRaises(OSError):
+                user_state_directory()
+
+    def test_non_windows_state_directory_preserves_legacy_base(self):
+        legacy_base = Path("/home/example/.local")
+        with patch("agent_dashboard.paths._is_windows", return_value=False), \
+             patch("agent_dashboard.paths.local_app_data", return_value=legacy_base):
+            self.assertEqual(user_state_directory(), legacy_base / "KV-Agent-Desk")
+
+    def test_legacy_roots_include_only_current_user_dashboard_candidates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder) / "Local"
+            packages = base / "Packages"
+            valid_package = packages / "OpenAI.Codex_synthetic_a"
+            valid_candidate = valid_package / "LocalCache" / "Local" / "KV-Agent-Desk"
+            valid_candidate.mkdir(parents=True)
+
+            missing_candidate_package = packages / "OpenAI.Codex_synthetic_b"
+            missing_candidate_package.mkdir(parents=True)
+            unrelated_candidate = packages / "OtherVendor.App_synthetic" / "LocalCache" / "Local" / "KV-Agent-Desk"
+            unrelated_candidate.mkdir(parents=True)
+
+            with patch("agent_dashboard.paths.local_app_data", return_value=base):
+                result = legacy_state_directories()
+
+            self.assertEqual(result, [base / "KV-Agent-Desk", valid_candidate])
+            self.assertFalse((base / "KV-Agent-Desk").exists())
+            self.assertFalse((missing_candidate_package / "LocalCache").exists())
 
 
 if __name__ == "__main__":
