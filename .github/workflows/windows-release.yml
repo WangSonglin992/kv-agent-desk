@@ -194,7 +194,7 @@ jobs:
             (Join-Path $state "history.json"),
             (Join-Path (Join-Path $state "ui-profiles") "synthetic-style.json")
           )
-          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"brightness":100,"rotation":180,"usb_enabled":true,"auto_start":false,"auto_update":true,"lcd_height":462,"codex_no_five_hour_limit":false,"ui_id":"synthetic-style"}')
+          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"brightness":100,"rotation":180,"usb_enabled":true,"auto_start":true,"auto_update":true,"lcd_height":462,"codex_no_five_hour_limit":false,"ui_id":"synthetic-style"}')
           [System.IO.File]::WriteAllText($syntheticFiles[1], '{"version":1,"profiles":{"codex":{"plan_name":"Synthetic plan","plan_spec":"Synthetic spec","expires_at":""},"zcode":{"plan_name":"","plan_spec":"","expires_at":""},"antigravity":{"plan_name":"","plan_spec":"","expires_at":""}}}')
           [System.IO.File]::WriteAllText($syntheticFiles[2], '{"synthetic-history":true}')
           [System.IO.File]::WriteAllText($syntheticFiles[3], '{"schema_version":1,"id":"synthetic-style","name":"Synthetic style","layout":"paper","elements":{}}')
@@ -202,15 +202,20 @@ jobs:
           foreach ($file in $syntheticFiles) {
             $expectedHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
           }
+          $baselineSettings = Get-Content -LiteralPath $syntheticFiles[0] -Raw | ConvertFrom-Json
+          $baselineSettingsHash = $expectedHashes[$syntheticFiles[0]]
+          $phase3SettingsHash = $null
           $savedUserProfile = $env:USERPROFILE
           try {
             $env:USERPROFILE = $syntheticProfile
-            foreach ($attempt in 1..2) {
+            foreach ($attempt in 1..4) {
               $arguments = @(
                 "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
-                ('/DIR="{0}"' -f $installDir),
-                "/MERGETASKS=!desktopicon,!autostart"
+                ('/DIR="{0}"' -f $installDir)
               )
+              if ($attempt -eq 3) {
+                $arguments += "/MERGETASKS=!desktopicon,!autostart"
+              }
               $process = Start-Process -FilePath $setup -ArgumentList $arguments -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -PassThru
               if (-not $process.WaitForExit(120000)) {
                 Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
@@ -225,7 +230,42 @@ jobs:
               if (-not (Test-Path -LiteralPath (Join-Path $installDir "KV-Agent-Desk.exe") -PathType Leaf)) {
                 throw "Setup did not install KV-Agent-Desk.exe in the isolated RUNNER_TEMP directory"
               }
-              foreach ($file in $syntheticFiles) {
+              if ($attempt -le 2) {
+                $expectedDesktopShortcut = 1
+                $expectedAutoStart = $true
+              } else {
+                $expectedDesktopShortcut = 0
+                $expectedAutoStart = $false
+              }
+              $settingsSnapshot = Get-Content -LiteralPath $syntheticFiles[0] -Raw | ConvertFrom-Json
+              if ($settingsSnapshot.auto_start -ne $expectedAutoStart) {
+                throw "Setup auto_start preference differs from expected phase $attempt"
+              }
+              $baselineFieldNames = @($baselineSettings.PSObject.Properties.Name | Sort-Object)
+              $currentFieldNames = @($settingsSnapshot.PSObject.Properties.Name | Sort-Object)
+              if (($baselineFieldNames -join ",") -ne ($currentFieldNames -join ",")) {
+                throw "Setup changed the synthetic settings field set"
+              }
+              foreach ($settingName in $baselineFieldNames) {
+                if ($settingName -eq "auto_start") { continue }
+                if (-not [object]::Equals($settingsSnapshot.$settingName, $baselineSettings.$settingName)) {
+                  throw "Setup changed a synthetic settings field other than auto_start: $settingName"
+                }
+              }
+              $settingsHash = (Get-FileHash -LiteralPath $syntheticFiles[0] -Algorithm SHA256).Hash
+              if ($attempt -le 2) {
+                if ($settingsHash -ne $baselineSettingsHash) {
+                  throw "Setup rewrote settings before auto_start changed"
+                }
+              } elseif ($attempt -eq 3) {
+                if ($settingsHash -eq $baselineSettingsHash) {
+                  throw "Setup did not persist the explicit auto_start opt-out"
+                }
+                $phase3SettingsHash = $settingsHash
+              } elseif ($settingsHash -ne $phase3SettingsHash) {
+                throw "Setup rewrote settings on reinstall after the explicit opt-out"
+              }
+              foreach ($file in ($syntheticFiles | Select-Object -Skip 1)) {
                 if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expectedHashes[$file]) {
                   throw "Setup changed a synthetic user-data file: $([System.IO.Path]::GetFileName($file))"
                 }
@@ -241,12 +281,14 @@ jobs:
               $iniText = [System.IO.File]::ReadAllText($ini, [System.Text.Encoding]::Unicode)
               if ($iniText -notmatch '\[Installation\]' -or
                   $iniText -notmatch [regex]::Escape($installDir) -or
-                  $iniText -notmatch 'DesktopShortcut=0' -or
+                  $iniText -notmatch [regex]::Escape("DesktopShortcut=$expectedDesktopShortcut") -or
                   $iniText -notmatch 'InstallerManaged=1') {
                 throw "Setup metadata does not identify the isolated install directory"
               }
               $mirror = Get-ItemProperty -LiteralPath "HKCU:\Software\KV-Agent-Desk"
-              if ($mirror.InstallDir -ne $installDir -or $mirror.DesktopShortcut -ne 0 -or $mirror.InstallerManaged -ne 1) {
+              if ($mirror.InstallDir -ne $installDir -or
+                  $mirror.DesktopShortcut -ne $expectedDesktopShortcut -or
+                  $mirror.InstallerManaged -ne 1) {
                 throw "Setup did not mirror the isolated installation preferences in HKCU"
               }
               $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D8918EF-160F-4D1E-AE68-E168DB0AD2B9}_is1"
@@ -336,9 +378,12 @@ jobs:
             if (-not (Test-Path -LiteralPath $state -PathType Container)) {
               throw "Setup uninstall removed the synthetic user-data directory"
             }
-            foreach ($file in $syntheticFiles) {
+            if ((Get-FileHash -LiteralPath $syntheticFiles[0] -Algorithm SHA256).Hash -ne $phase3SettingsHash) {
+              throw "Setup uninstall changed synthetic settings after the explicit opt-out"
+            }
+            foreach ($file in ($syntheticFiles | Select-Object -Skip 1)) {
               if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expectedHashes[$file]) {
-                throw "Setup uninstall changed a synthetic user-data file"
+                throw "Setup uninstall changed a synthetic non-settings user-data file"
               }
             }
             if (Test-Path -LiteralPath (Join-Path $state "installation.ini")) {

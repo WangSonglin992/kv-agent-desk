@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.7.3"
+  #define AppVersion "0.7.4"
 #endif
 #define SetupPayload GetEnv("KV_SETUP_PAYLOAD")
 
@@ -37,8 +37,8 @@ VersionInfoProductVersion={#AppVersion}
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional options:"; Flags: checkedonce
-Name: "autostart"; Description: "Start KV Agent Desk when I sign in"; GroupDescription: "Additional options:"; Flags: checkedonce
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional options:"
+Name: "autostart"; Description: "Start KV Agent Desk when I sign in"; GroupDescription: "Additional options:"
 
 [Files]
 ; The temporary copy is used for the pre-replacement backup and graceful stop.

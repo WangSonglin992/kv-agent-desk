@@ -31,9 +31,12 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("ArchitecturesAllowed=x64compatible", self.definition)
         self.assertIn("ArchitecturesInstallIn64BitMode=x64compatible", self.definition)
         self.assertIn("DisableDirPage=no", self.definition)
-        self.assertIn("Flags: checkedonce", self.definition)
-        self.assertIn("Name: \"desktopicon\"", self.definition)
-        self.assertIn("Name: \"autostart\"", self.definition)
+        tasks = self.definition.split("[Tasks]", 1)[1].split("[Files]", 1)[0]
+        self.assertIn('Name: "desktopicon"', tasks)
+        self.assertIn('Name: "autostart"', tasks)
+        self.assertNotIn("checkedonce", tasks.casefold())
+        self.assertNotIn("unchecked", tasks.casefold())
+        self.assertNotIn("Flags:", tasks)
         self.assertIn("--state-dir \"\"{%USERPROFILE}\\.kv-agent-desk\"\"", self.definition)
 
     def test_ini_precedes_registry_and_invalid_metadata_aborts_setup(self):
@@ -122,12 +125,15 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("Build-Installer.ps1 -SkipAppBuild", self.workflow)
         self.assertIn("RUNNER_TEMP", self.workflow)
         self.assertIn("USERPROFILE", self.workflow)
-        self.assertIn('"auto_start":false', self.workflow)
+        self.assertIn('"auto_start":true', self.workflow)
         self.assertIn('"ui_id":"synthetic-style"', self.workflow)
         self.assertIn('"schema_version":1,"id":"synthetic-style"', self.workflow)
         self.assertIn('"profiles":{"codex"', self.workflow)
         self.assertIn("/MERGETASKS=!desktopicon,!autostart", self.workflow)
         self.assertNotIn('"/TASKS="', self.workflow)
+        self.assertIn("foreach ($attempt in 1..4)", self.workflow)
+        self.assertIn("$phase3SettingsHash", self.workflow)
+        self.assertIn("Setup rewrote settings on reinstall after the explicit opt-out", self.workflow)
         self.assertIn('"My Agent Desk"', self.workflow)
         self.assertIn("[IO.Path]::GetFullPath($installDir).TrimEnd", self.workflow)
         self.assertIn("[string]::Equals($normalizedRegisteredLocation, $expectedLocation, [StringComparison]::OrdinalIgnoreCase)", self.workflow)
@@ -146,7 +152,7 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("KV-Agent-Desk-Setup.exe", self.workflow)
         self.assertIn("KV-Agent-Desk-Setup.exe.sha256", self.workflow)
 
-    def test_setup_smoke_seeds_valid_user_state_with_autostart_off(self):
+    def test_setup_smoke_seeds_valid_user_state_with_autostart_on(self):
         from agent_dashboard.settings import AppSettings
         from agent_dashboard.subscriptions import SubscriptionProfiles
         from agent_dashboard.ui_profiles import UIProfiles
@@ -160,7 +166,7 @@ class InstallerDefinitionTests(unittest.TestCase):
             return json.loads(match.group(1))
 
         settings = fixture(0)
-        self.assertFalse(settings["auto_start"])
+        self.assertTrue(settings["auto_start"])
         self.assertEqual(settings["ui_id"], "synthetic-style")
         AppSettings(None).update(settings)
 
