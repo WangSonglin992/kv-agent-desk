@@ -251,8 +251,15 @@ jobs:
               }
               $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D8918EF-160F-4D1E-AE68-E168DB0AD2B9}_is1"
               $uninstallEntry = Get-ItemProperty -LiteralPath $uninstallKey
-              if ($uninstallEntry.InstallLocation -ne $installDir) {
-                throw "Windows uninstall registration does not match the isolated install directory"
+              $expectedLocation = [IO.Path]::GetFullPath($installDir).TrimEnd([char[]]@('\', '/'))
+              $registeredLocation = [string]$uninstallEntry.InstallLocation
+              try {
+                $normalizedRegisteredLocation = [IO.Path]::GetFullPath($registeredLocation).TrimEnd([char[]]@('\', '/'))
+              } catch {
+                throw "Windows uninstall InstallLocation is invalid. Expected synthetic path '$expectedLocation'; received '$registeredLocation'."
+              }
+              if (-not [string]::Equals($normalizedRegisteredLocation, $expectedLocation, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Windows uninstall InstallLocation mismatch. Expected synthetic path '$expectedLocation'; received '$registeredLocation' (normalized '$normalizedRegisteredLocation')."
               }
             }
 
