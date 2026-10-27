@@ -188,20 +188,23 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Parameters: string;
+  DesktopShortcutChoice: string;
+  AutoStartChoice: string;
   ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then begin
-    Parameters := '--installer-finish --install-dir "' + ExpandConstant('{app}') +
-      '" --desktop-shortcut ';
     if WizardIsTaskSelected('desktopicon') then
-      Parameters := Parameters + '1'
+      DesktopShortcutChoice := '1'
     else
-      Parameters := Parameters + '0';
-    Parameters := Parameters + ' --auto-start ';
+      DesktopShortcutChoice := '0';
     if WizardIsTaskSelected('autostart') then
-      Parameters := Parameters + '1'
+      AutoStartChoice := '1'
     else
-      Parameters := Parameters + '0';
+      AutoStartChoice := '0';
+    Parameters := '--installer-finish --install-dir "' + ExpandConstant('{app}') +
+      '" --desktop-shortcut ' + DesktopShortcutChoice +
+      ' --auto-start ' + AutoStartChoice;
+    Log('KV task desktop=' + DesktopShortcutChoice + ' autostart=' + AutoStartChoice);
 
     if not Exec(ExpandConstant('{app}\KV-Agent-Desk.exe'), Parameters, '', SW_HIDE,
        ewWaitUntilTerminated, ResultCode) then

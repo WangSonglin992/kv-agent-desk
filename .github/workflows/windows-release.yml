@@ -205,15 +205,70 @@ jobs:
           $baselineSettings = Get-Content -LiteralPath $syntheticFiles[0] -Raw | ConvertFrom-Json
           $baselineSettingsHash = $expectedHashes[$syntheticFiles[0]]
           $phase3SettingsHash = $null
+          function Write-SyntheticTaskDiagnostics {
+            param(
+              [int]$Attempt,
+              [string]$SaveInfPath,
+              [string]$TaskParameter,
+              [string]$SetupLogPath
+            )
+            Write-Output ("synthetic_setup_attempt={0}" -f $Attempt)
+            Write-Output ("synthetic_cli_task_parameter={0}" -f $TaskParameter)
+            if (-not (Test-Path -LiteralPath $SaveInfPath -PathType Leaf)) {
+              Write-Output "synthetic_selected_tasks=saveinf_missing"
+              return
+            }
+            $taskRecord = Select-String -LiteralPath $SaveInfPath -Pattern '^\s*Tasks\s*=' | Select-Object -First 1
+            if (-not $taskRecord) {
+              Write-Output "synthetic_selected_tasks=task_record_missing"
+              return
+            }
+            $taskList = $taskRecord.Line.Split('=', 2)[1].Trim()
+            $safeTaskNames = @()
+            foreach ($taskName in $taskList.Split(',')) {
+              if ($safeTaskNames.Count -ge 8) { break }
+              $candidate = $taskName.Trim()
+              if ($candidate -in @("desktopicon", "autostart")) {
+                $safeTaskNames += $candidate
+              } elseif ($candidate.Length -gt 0) {
+                $safeTaskNames += "unknown"
+              }
+            }
+            if ($safeTaskNames.Count -eq 0) {
+              Write-Output "synthetic_selected_tasks=none"
+            } else {
+              Write-Output ("synthetic_selected_tasks={0}" -f ($safeTaskNames -join ","))
+            }
+            if (-not (Test-Path -LiteralPath $SetupLogPath -PathType Leaf)) {
+              Write-Output "synthetic_finish_cli_choices=setup_log_missing"
+              return
+            }
+            $finishChoiceLine = Select-String -LiteralPath $SetupLogPath -Pattern 'KV task desktop=[01] autostart=[01]' |
+              Select-Object -Last 1
+            if ($finishChoiceLine -and
+                $finishChoiceLine.Line -match 'KV task desktop=([01]) autostart=([01])') {
+              Write-Output ("synthetic_finish_cli_desktop_shortcut={0}" -f $Matches[1])
+              Write-Output ("synthetic_finish_cli_auto_start={0}" -f $Matches[2])
+            } else {
+              Write-Output "synthetic_finish_cli_choices=not_logged"
+            }
+          }
           $savedUserProfile = $env:USERPROFILE
           try {
             $env:USERPROFILE = $syntheticProfile
             foreach ($attempt in 1..4) {
+              $saveInfPath = Join-Path $smokeRoot ("setup-attempt-{0}.inf" -f $attempt)
+              $setupLogPath = Join-Path $smokeRoot ("setup-attempt-{0}.log" -f $attempt)
+              $taskParameter = "none"
+              try {
               $arguments = @(
                 "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
-                ('/DIR="{0}"' -f $installDir)
+                ('/DIR="{0}"' -f $installDir),
+                ('/SAVEINF="{0}"' -f $saveInfPath),
+                ('/LOG="{0}"' -f $setupLogPath)
               )
               if ($attempt -eq 3) {
+                $taskParameter = "MERGETASKS=!desktopicon,!autostart"
                 $arguments += "/MERGETASKS=!desktopicon,!autostart"
               }
               $process = Start-Process -FilePath $setup -ArgumentList $arguments -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -PassThru
@@ -302,6 +357,14 @@ jobs:
               }
               if (-not [string]::Equals($normalizedRegisteredLocation, $expectedLocation, [StringComparison]::OrdinalIgnoreCase)) {
                 throw "Windows uninstall InstallLocation mismatch. Expected synthetic path '$expectedLocation'; received '$registeredLocation' (normalized '$normalizedRegisteredLocation')."
+              }
+              } catch {
+                try {
+                  Write-SyntheticTaskDiagnostics -Attempt $attempt -SaveInfPath $saveInfPath -TaskParameter $taskParameter -SetupLogPath $setupLogPath
+                } catch {
+                  Write-Output "synthetic_task_diagnostics=unavailable"
+                }
+                throw
               }
             }
 
@@ -440,6 +503,8 @@ jobs:
           path: |
             ${{ runner.temp }}/kv-agent-installer-lifecycle-diagnostic.json
             ${{ runner.temp }}/kv-agent-desk-setup-smoke-${{ github.run_id }}-${{ github.run_attempt }}/uninstaller.log
+            ${{ runner.temp }}/kv-agent-desk-setup-smoke-${{ github.run_id }}-${{ github.run_attempt }}/setup-attempt-*.inf
+            ${{ runner.temp }}/kv-agent-desk-setup-smoke-${{ github.run_id }}-${{ github.run_attempt }}/setup-attempt-*.log
           if-no-files-found: ignore
           retention-days: 3
 
