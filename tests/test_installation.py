@@ -89,7 +89,7 @@ class InstallationTests(unittest.TestCase):
         self.addCleanup(self.fixture_folder.cleanup)
 
     def test_installed_executable_is_fixed_under_local_app_data(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             local = Path(folder)
             target = local / "Programs" / "KV-Agent-Desk" / "KV-Agent-Desk.exe"
             target.parent.mkdir(parents=True)
@@ -111,7 +111,7 @@ class InstallationTests(unittest.TestCase):
             )
 
     def test_first_install_preserves_raw_state_and_copies_only_the_executable(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local app data"
             state_dir = local / "KV-Agent-Desk"
@@ -162,7 +162,7 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in target.parent.iterdir()), [target.name])
 
     def test_update_stops_only_marked_server_then_replaces_and_launches(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             state_dir = local / "KV-Agent-Desk"
@@ -194,7 +194,7 @@ class InstallationTests(unittest.TestCase):
             launch.assert_called_once_with(target, background=True, state_dir=state_dir)
 
     def test_same_hash_repairs_shortcut_and_shows_existing_app_without_replacing_or_relaunching(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             target = local / "Programs" / "KV-Agent-Desk" / "KV-Agent-Desk.exe"
@@ -226,7 +226,7 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse((local / "KV-Agent-Desk" / "backups").exists())
 
     def test_same_hash_with_no_server_starts_installed_executable(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             target = local / "Programs" / "KV-Agent-Desk" / "KV-Agent-Desk.exe"
@@ -250,7 +250,7 @@ class InstallationTests(unittest.TestCase):
             launch.assert_called_once_with(target, background=False, state_dir=state_dir)
 
     def test_same_hash_with_legacy_server_hands_off_before_launching_target(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             target = local / "Programs" / "KV-Agent-Desk" / "KV-Agent-Desk.exe"
@@ -274,7 +274,7 @@ class InstallationTests(unittest.TestCase):
             launch.assert_called_once_with(target, background=True, state_dir=state_dir)
 
     def test_update_overwrites_registered_non_default_path_and_keeps_local_history(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             state_dir = self.fixture_state
             state_dir.mkdir(parents=True)
@@ -308,7 +308,7 @@ class InstallationTests(unittest.TestCase):
             launch.assert_called_once_with(target, background=True, state_dir=state_dir)
 
     def test_same_hash_with_unsupported_portable_server_hands_off_before_launch(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             target = local / "Programs" / "KV-Agent-Desk" / "KV-Agent-Desk.exe"
@@ -352,7 +352,7 @@ class InstallationTests(unittest.TestCase):
         wait.assert_not_called()
 
     def test_replace_timeout_preserves_old_executable_and_restarts_it_in_background(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             local = root / "local"
             state_dir = local / "KV-Agent-Desk"
@@ -382,7 +382,7 @@ class InstallationTests(unittest.TestCase):
             self.assertEqual(list(target.parent.glob(".KV-Agent-Desk.*.tmp")), [])
 
     def test_invalid_source_and_non_windows_shortcut_fail_without_side_effects(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             state_dir = root / "state"
             with patch.object(installation, "_is_windows", return_value=True):
@@ -400,7 +400,7 @@ class InstallationTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_shortcut_uses_powershell_desktop_and_environment_target_for_paths_with_spaces(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)
             target = root / "Program Files" / "KV Agent Desk" / "KV Agent Desk.exe"
             target.parent.mkdir(parents=True)

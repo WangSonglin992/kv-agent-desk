@@ -4,7 +4,7 @@
 
 ## 源码与用户数据是两回事
 
-- Git 源码是公开仓库 `https://github.com/WangSonglin992/kv-agent-desk`，当前公开交接基线是 commit `21ca832`、release `v0.6.2`。新安装器将是用户本次任务后的新增交付；克隆之后先看最新 `main`、tag、`CHANGELOG.md` 和 [HANDOFF.md](HANDOFF.md)，再决定后续基线。
+- Git 源码是公开仓库 `https://github.com/WangSonglin992/kv-agent-desk`。安装器源码已提交为 `8680f74` 并打 `v0.7.0` tag，但 CI run `40462507734` 在单元测试阶段因 Windows TEMP 路径保护 fixture 误报失败，没有发布 Release。修复目标为 `v0.7.1`，必须保留既有 `v0.7.0` tag。克隆之后先看最新 `main`、tag、`CHANGELOG.md` 和 [HANDOFF.md](HANDOFF.md)，再决定后续基线。
 - 应用运行资料在 `%USERPROFILE%\.kv-agent-desk`：设置、手动套餐资料、UI profile、状态/额度缓存和截图。Windows 下其父路径有意放在用户主目录，因为打包宿主的 AppData 重定向曾让打包启动和 Explorer 启动读取到不同文件。
 - 迁移代码会在该数据目录内保留 `migration-backups/`，旧 LocalAppData 和当前用户 Codex Windows 隔离目录的原始文件也保留在旧位置。不要从这些目录复制任何文件进 Git。
 - 已安装程序与源码目录分离。用户要求的安装目标为 `D:\APP\KV-Agent-Desk`。安装登记正本是 `%USERPROFILE%\.kv-agent-desk\installation.ini`（UTF-16 BOM，`[Installation]` 中的 `InstallDir`、`DesktopShortcut`、`InstallerManaged`）；HKCU `Software\KV-Agent-Desk` 是镜像/回退。换 workspace 后不能从当前源码路径猜安装位置。Setup 编译器固定为 Inno Setup 7.1.0 x64、release tag `is-7_1_0`；CI 须验证官方 attestation 和 Authenticode 后再编译。
@@ -27,7 +27,7 @@ git log -1 --oneline
 
 打开 [HANDOFF.md](HANDOFF.md)，然后从 `README.md` 的本地构建步骤开始。新目录必须新建 `.venv`：虚拟环境的 Python、PyInstaller 和 Windows 路径常带原工作区绝对路径，直接复制旧 `.venv` 容易启动失败。项目构建脚本会在新工作区创建 Python 3.12 环境，安装锁定的 build 依赖、运行单元测试并生成 `dist\KV-Agent-Desk.exe`。
 
-当前公开版本的源码打包检查为：
+当前开发版的源码打包检查命令为：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Build-Dashboard.ps1
@@ -70,7 +70,7 @@ python tools/check_public_tree.py
 5. 在安装、同路径复装及卸载后，核对原始设置语义、订阅资料、全部 UI profile 与本机历史仍保留。卸载不删除用户资料目录及迁移备份。
 6. 验证程序与安装器均由干净 CI 构建，公开清单只允许源代码、合成样例、公开文档与明确列出的五个应用资产。
 
-安装器实施仍在本次工作中；上面的第 1–6 项是验收线，不是已完成状态。详见 [HANDOFF.md](HANDOFF.md) 的“安装器工作线”，最终验收证据需更新到交接文件和 README。登记 INI 移动 workspace 时不迁移或删除，旧用户数据不能混入源码 archive。
+`v0.7.0` 中安装器源码已经实现，但 CI 未通过单元测试，未运行打包/发布步骤。报告的失败是 292 项中 48 条 Windows TEMP 8.3 短/长路径 fixture 保护误报，并涉及内层临时目录未登记；后续只改了测试/helper，不改安装产品逻辑。`v0.7.1` CI 与 release、实际 D 盘 Setup、首次安装/复装/自启/卸载保留检查仍待完成。上面的第 1–6 项是验收线，不是通过证明。登记 INI 移动 workspace 时不迁移或删除，旧用户数据不能混入源码 archive。
 
 ## 真实用户资料的边界
 

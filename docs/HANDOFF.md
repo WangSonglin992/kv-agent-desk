@@ -4,9 +4,10 @@
 
 ## 目前状态
 
-- 公共基线是 commit `21ca832`、应用版本 0.6.2。它修复了 Codex 打包环境与 Windows Explorer 访问不同 AppData 目录的问题，首次运行会将旧数据迁移到用户主目录下的 `.kv-agent-desk` 并保留备份。
+- 当前源码已提交为 `8680f74` 并打上 `v0.7.0` tag；CI run `40462507734` 在单元测试阶段失败，没有生成 GitHub Release。后续修复目标是 `v0.7.1`，保留既有 `v0.7.0` tag，不移动或重写历史。
+- 0.6.2 修复了 Codex 打包环境与 Windows Explorer 访问不同 AppData 目录的问题，首次运行会将旧数据迁移到用户主目录下的 `.kv-agent-desk` 并保留备份。
 - 用户现在要求把应用改为常规 Windows 安装器：默认安装到 `D:\APP\KV-Agent-Desk`，首次安装默认创建桌面快捷方式并启用自启动，复装更新使用注册的安装位置，同时保留应用外的本地历史、套餐资料和自定义样式。
-- 本次安装器实现、构建、安装及交接验收尚在进行中。此版本中仍可见的旧 per-user 安装行为，不代表新安装器已经发布。完成后应在本节写入实际版本、提交、发布链接、安装目录和现场验收结果。
+- 安装器源码已提交进 `v0.7.0`，但 CI 未通过且没有发布 Setup；D 盘安装、复装路径保留及卸载数据保护尚未验收。不要将源码 commit/tag 描述为可下载的正式安装器。完成后在本节写入 `v0.7.1` 实际 commit、CI、release、Setup 资产、登记路径和现场验收结果。
 - 用户计划转到新工作区继续维护；后续功能修改在新工作区构建公开 release，安装程序负责更新目标安装目录。实际安装登记位置应从应用自己的 HKCU 登记读取，不能靠旧工作区或源码目录推断。
 - 安装身份的正本为 `%USERPROFILE%\.kv-agent-desk\installation.ini`（UTF-16 BOM，`[Installation]` 节）。`InstallDir` 保存经校验的绝对程序目录；`DesktopShortcut` 与 `InstallerManaged` 保存 0/1 选项。HKCU `Software\KV-Agent-Desk` 是镜像/回退，因此更换开发工作区或打包宿主后安装身份仍保持一致。卸载可移除此登记文件和应用拥有的注册表镜像；必须保留同目录中的其他用户数据。
 
@@ -55,7 +56,8 @@ Windows 发布版规范数据位置是 `%USERPROFILE%\.kv-agent-desk`，与安�
 - 编译器固定为 Inno Setup 7.1.0 x64（release tag `is-7_1_0`）；CI 必须先通过官方 release asset verification 与 Authenticode 签名校验再执行编译。
 - 用户数据目录在程序目录之外；复装只替换产品文件，卸载只移除程序和应用登记，两个操作都保留设置、手动套餐、历史缓存、自定义 profile 和备份。
 - 0.6.2 updater 下载经过 SHA-256 验证的 EXE。后续安装器发布必须保持此旧客户端更新协议兼容，或使用清晰、已验证的迁移/升级分支；未经验证不要改写线上 update manifest。
-- Setup 脚本/CI资产名、CLI 与 silent 安装退出码、首次安装/复装/任务选项/卸载是否保留文件、以及 D 盘实际验收 commit/tag 均待安装器完成后补齐；本节此前提出的内容是验收边界，不是完成证明。
+- 0.7.0 workflow `40462507734` 报告 292 项检查中有 48 条临时 fixture 保护误报，发生在单元测试阶段，因此后续构建/发布阶段未运行。根因已定位为 Windows TEMP 的 8.3 短路径别名未与长路径登记映射，以及测试内层临时目录未纳入保护注册。后续修复只改测试/helper，没有改安装产品逻辑；新 commit 和 CI 重跑结果仍待验收。历史 tag 保留。
+- Setup 脚本/CI资产名、CLI 与 silent 安装退出码、首次安装/复装/任务选项/卸载数据保留和 D 盘现场验收均未通过发布验收；本节此前提出的内容是验收线，不是完成证明。
 
 建议检查路径：`agent_dashboard/installation.py`、`app.py` 的入口和 `startup_command`、`tools/create_update_manifest.py`、`.github/workflows/windows-release.yml`、`Build-Dashboard.ps1`、`Start-Dashboard.cmd` 以及安装器脚本。源码运行没有受信任的安装器权限，不允许通过本机控制页传入任意安装路径或命令。
 
@@ -86,8 +88,10 @@ Windows 发布版规范数据位置是 `%USERPROFILE%\.kv-agent-desk`，与安�
 | 0.6.0 | per-user 安装骨架、自动更新清单、版本切换。 |
 | 0.6.1 | 自启动明确绑定数据路径、失败读取重试、不以内存默认设置覆盖磁盘配置。 |
 | 0.6.2 | 修复打包宿主 AppData 重定向，统一用户数据路径并迁移旧副本。 |
+| 0.7.0 | Windows 安装器源码已提交并打 tag；CI 在单元测试阶段被临时目录路径别名测试误报阻断，没有 release 或可安装 Setup。保留 tag。 |
+| 0.7.1 | 目标为修复测试/helper CI 误报并发布安装器；待完成 CI、构建、安装和保留本地资料验收。 |
 
-既有开发验收基线为 `python -m unittest discover -s tests -q` 发现 256 项，其中本机有 1 项因 symlink 权限跳过；另有 Windows Release CI 执行全部测试、公开索引扫描、source/demo 和打包 EXE smoke。此数字是 0.6.2 的已知记录，不代表安装器 0.7.0 已验证。Windows 实际 USB 显示、安装向导和卸载必须分别记录现场证据；模拟 `Run` 启动不等同于重启整台电脑。
+既有开发验收基线为 `python -m unittest discover -s tests -q` 发现 256 项，其中本机有 1 项因 symlink 权限跳过。此为 0.6.2 基线。CI run `40462507734` 报告 292 项中 48 条 fixture false positives，在 unit 阶段失败；Windows Release 的打包/发布 smoke 未运行。测试/helper 修复需要新的 CI run 证明，不能沿用失败前计数宣称安装器通过。Windows 实际 USB 显示、安装向导、升级/卸载必须分别记录现场证据；模拟 Run command 也不等同于重启整台电脑。
 
 ## 新工作区续接
 

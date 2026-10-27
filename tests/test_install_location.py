@@ -5,7 +5,13 @@ import unittest
 from unittest.mock import patch
 
 import agent_dashboard.install_location as location
-from install_test_safety import _REAL_PROFILE, allow_synthetic_root, audit, isolate_real_user_state
+from install_test_safety import (
+    _REAL_PROFILE,
+    allow_synthetic_root,
+    audit,
+    isolate_real_user_state,
+    short_windows_path,
+)
 
 
 class FakeRegistry:
@@ -66,7 +72,7 @@ class FakeRegistry:
 
 class InstallLocationTests(unittest.TestCase):
     def setUp(self):
-        self.folder = tempfile.TemporaryDirectory()
+        self.folder = tempfile.TemporaryDirectory(prefix="KV-Agent-Desk-install-test-fixture-")
         allow_synthetic_root(self, Path(self.folder.name))
         isolate_real_user_state(self)
         self.home = Path(self.folder.name) / "user profile"
@@ -146,6 +152,16 @@ class InstallLocationTests(unittest.TestCase):
             audit("open", (blocked, "wb", os.O_WRONLY | os.O_CREAT))
         fixture_write = Path(self.folder.name) / "synthetic-state.json"
         audit("open", (fixture_write, "wb", os.O_WRONLY | os.O_CREAT))
+
+    def test_audit_guard_accepts_short_parent_with_long_temporary_basename(self):
+        original = Path(self.folder.name)
+        alias_parent = short_windows_path(original.parent)
+        if alias_parent is None or Path(alias_parent).resolve() == original.parent.resolve():
+            self.skipTest("this Windows volume does not provide 8.3 aliases")
+        mixed_root = Path(alias_parent) / original.name
+        self.assertEqual(mixed_root.resolve(strict=True), original.resolve(strict=True))
+        self.assertNotEqual(mixed_root.absolute(), original.absolute())
+        audit("open", (mixed_root / "synthetic-alias-check.json", "wb", os.O_WRONLY | os.O_CREAT))
 
     def test_utf16_install_ini_is_canonical_over_stale_registry_mirror(self):
         registered = self.install_dir_fixture()

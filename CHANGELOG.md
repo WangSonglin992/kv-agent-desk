@@ -1,10 +1,14 @@
 # Changelog
 
+## 0.7.1
+
+- Release the conventional Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`, with desktop shortcut and startup selected by default.
+- Keep installation identity in `%USERPROFILE%\.kv-agent-desk\installation.ini`; update the registered install directory and preserve independent local history on reinstall/uninstall.
+- Correct the Windows CI temporary-fixture protection for 8.3 short/long path aliases and nested temporary directories.
+
 ## 0.7.0
 
-- Add a Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`; first-install desktop shortcut and startup tasks are checked by default.
-- Store the installation identity at `%USERPROFILE%\.kv-agent-desk\installation.ini`; mirror it in the app-owned HKCU key so moving the source workspace does not change the install path.
-- Reinstall and upgrades use the registered directory; uninstall removes application files and owned startup/shortcut registrations while preserving user data, history and custom layouts.
+- Installer source was committed and tagged, but Windows CI run 40462507734 failed during unit tests because of temporary-fixture path protection false positives; no GitHub release was published. Keep the existing tag.
 
 ## 0.6.2
 

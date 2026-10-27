@@ -62,6 +62,27 @@ def _normalize(path: object) -> str | None:
     return ntpath.normcase(ntpath.abspath(value)).rstrip("\\/")
 
 
+def _short_windows_path(path: Path) -> str | None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_short_path = kernel.GetShortPathNameW
+    get_short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    get_short_path.restype = wintypes.DWORD
+    required = get_short_path(str(path), None, 0)
+    if required == 0 or required > 32768:
+        return None
+    buffer = ctypes.create_unicode_buffer(required)
+    written = get_short_path(str(path), buffer, required)
+    if written == 0 or written >= required:
+        return None
+    return buffer.value
+
+
+short_windows_path = _short_windows_path
+
+
 def _inside(path: str, root: str) -> bool:
     return path == root or path.startswith(root + "\\")
 
@@ -105,6 +126,8 @@ def allow_synthetic_root(test_case, path: Path) -> None:
     """Allow exactly one existing TemporaryDirectory below the active TEMP root."""
     candidate = Path(path)
     temp_root = Path(tempfile.gettempdir()).resolve()
+    original_absolute = candidate.absolute()
+    original_alias = _normalize(original_absolute)
     resolved = candidate.resolve(strict=True)
     if (candidate.is_symlink() or not candidate.is_dir() or resolved == temp_root
             or resolved.parent != temp_root or _is_private_path(resolved)):
@@ -112,8 +135,21 @@ def allow_synthetic_root(test_case, path: Path) -> None:
     normalized = _normalize(resolved)
     if normalized is None:
         raise ValueError("synthetic state root must be absolute")
-    _SANDBOX_ROOTS.add(normalized)
-    test_case.addCleanup(_SANDBOX_ROOTS.discard, normalized)
+    aliases = {normalized}
+    if original_alias is not None:
+        resolved_original = _normalize(original_absolute.resolve(strict=True))
+        if resolved_original != normalized:
+            raise ValueError("temporary mixed short/long path changed directory identity")
+        aliases.add(original_alias)
+    short_path = _short_windows_path(resolved)
+    if short_path:
+        if _normalize(Path(short_path).resolve(strict=True)) != normalized:
+            raise ValueError("temporary 8.3 path did not resolve to the same synthetic root")
+        short_normalized = _normalize(Path(short_path))
+        if short_normalized is not None:
+            aliases.add(short_normalized)
+    _SANDBOX_ROOTS.update(aliases)
+    test_case.addCleanup(_SANDBOX_ROOTS.difference_update, aliases)
 
 
 def register_bootstrap_sandbox(path: Path) -> Path:
