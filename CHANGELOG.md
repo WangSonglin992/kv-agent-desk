@@ -1,18 +1,27 @@
 # Changelog
 
+## 0.7.4
+
+- Preserve Setup shortcut/startup task choices across reinstalls; remove `checkedonce` and retain prior selections.
+- Cover default-on install/reinstall and explicit opt-out/reinstall cases with a four-stage regression matrix.
+
+## 0.7.3
+
+- Release the Windows Setup wizard defaulting to `D:\APP\KV-Agent-Desk`, with shortcut and startup selected by default.
+- Persist the selected install path in `%USERPROFILE%\.kv-agent-desk\installation.ini`; upgrades use that registration and preserve independent user data.
+- Remove the application desktop shortcut using Inno `[Icons]` uninstall logging, avoiding a PowerShell/COM subprocess in uninstall.
+
 ## 0.7.2
 
-- Provide the Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`, with desktop shortcut and startup selected by default.
-- Store installation identity at `%USERPROFILE%\.kv-agent-desk\installation.ini`; updates use its registered path and uninstall preserves user history and custom layouts.
-- Normalize shortcut install paths and cover Windows TEMP 8.3/nested fixture paths in CI.
+- Setup uninstall CI timed out during PowerShell/COM shortcut deletion; no Release was published. Keep the tag.
 
 ## 0.7.1
 
-- Commit `464417b` fixed the first Windows TEMP fixture alias checks; CI run 40463890833 still had one shortcut path assertion failure and one skipped check. No release was published; keep the tag.
+- Shortcut path normalization CI had one failed assertion and one skip; no Release was published. Keep the tag.
 
 ## 0.7.0
 
-- Installer source was tagged, but CI run 40462507734 failed on Windows TEMP fixture protection. No release was published; keep the tag.
+- Windows TEMP fixture path protection produced CI false positives; no Release was published. Keep the tag.
 
 ## 0.6.2
 
