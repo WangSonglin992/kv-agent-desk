@@ -1,6 +1,6 @@
 [project]
 name = "kv-agent-dashboard"
-version = "0.7.1"
+version = "0.7.2"
 description = "Local Windows agent dashboard for Thermalright KV 9.16 USB LCD"
 requires-python = ">=3.12"
 dependencies = ["Pillow>=10.4,<13", "pywebview==6.2.1", "pystray==0.19.5"]

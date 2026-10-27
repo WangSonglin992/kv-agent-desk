@@ -1,14 +1,18 @@
 # Changelog
 
+## 0.7.2
+
+- Provide the Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`, with desktop shortcut and startup selected by default.
+- Store installation identity at `%USERPROFILE%\.kv-agent-desk\installation.ini`; updates use its registered path and uninstall preserves user history and custom layouts.
+- Normalize shortcut install paths and cover Windows TEMP 8.3/nested fixture paths in CI.
+
 ## 0.7.1
 
-- Release the conventional Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`, with desktop shortcut and startup selected by default.
-- Keep installation identity in `%USERPROFILE%\.kv-agent-desk\installation.ini`; update the registered install directory and preserve independent local history on reinstall/uninstall.
-- Correct the Windows CI temporary-fixture protection for 8.3 short/long path aliases and nested temporary directories.
+- Commit `464417b` fixed the first Windows TEMP fixture alias checks; CI run 40463890833 still had one shortcut path assertion failure and one skipped check. No release was published; keep the tag.
 
 ## 0.7.0
 
-- Installer source was committed and tagged, but Windows CI run 40462507734 failed during unit tests because of temporary-fixture path protection false positives; no GitHub release was published. Keep the existing tag.
+- Installer source was tagged, but CI run 40462507734 failed on Windows TEMP fixture protection. No release was published; keep the tag.
 
 ## 0.6.2
 

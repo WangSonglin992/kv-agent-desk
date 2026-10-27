@@ -128,12 +128,13 @@ def _owned_shortcut_targets(executable: Path,
         if not candidate.is_absolute() or candidate.suffix.casefold() != ".exe":
             continue
         try:
-            identity = os.path.normcase(str(candidate.resolve()))
+            resolved = candidate.resolve()
+            identity = os.path.normcase(str(resolved))
         except (OSError, RuntimeError, ValueError):
             continue
         if identity not in known:
             known.add(identity)
-            result.append(candidate)
+            result.append(resolved)
     return result
 
 

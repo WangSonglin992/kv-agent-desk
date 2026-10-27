@@ -129,6 +129,21 @@ class InstallerLifecycleTests(unittest.TestCase):
                 lifecycle.handle_installer_lifecycle(["--installer-prepare", "--portable"])
         prepare.assert_not_called()
 
+    def test_shortcut_targets_are_resolved_and_deduplicated_for_synthetic_aliases(self):
+        install_dir = self.root / "synthetic install"
+        executable = self.executable(install_dir)
+        alias_component = self.root / "synthetic alias"
+        alias_component.mkdir()
+        alias_executable = alias_component / ".." / install_dir.name / "KV-Agent-Desk.exe"
+        previous = install_location.Installation(install_dir, registered=True)
+
+        with patch.object(installation, "legacy_installation_executable", return_value=alias_executable):
+            targets = lifecycle._owned_shortcut_targets(alias_executable, previous)
+
+        self.assertEqual(targets, [executable.resolve()])
+        self.assertTrue(targets[0].is_absolute())
+        self.assertNotIn("..", targets[0].parts)
+
     def test_finish_preserves_settings_bytes_when_auto_start_already_matches(self):
         install_dir = self.root / "registered install"
         executable = self.executable(install_dir)
