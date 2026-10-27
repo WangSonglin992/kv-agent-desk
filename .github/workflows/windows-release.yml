@@ -194,10 +194,10 @@ jobs:
             (Join-Path $state "history.json"),
             (Join-Path (Join-Path $state "ui-profiles") "synthetic-style.json")
           )
-          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"synthetic-settings":true}')
-          [System.IO.File]::WriteAllText($syntheticFiles[1], '{"synthetic-subscription":true}')
+          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"brightness":100,"rotation":180,"usb_enabled":true,"auto_start":false,"auto_update":true,"lcd_height":462,"codex_no_five_hour_limit":false,"ui_id":"synthetic-style"}')
+          [System.IO.File]::WriteAllText($syntheticFiles[1], '{"version":1,"profiles":{"codex":{"plan_name":"Synthetic plan","plan_spec":"Synthetic spec","expires_at":""},"zcode":{"plan_name":"","plan_spec":"","expires_at":""},"antigravity":{"plan_name":"","plan_spec":"","expires_at":""}}}')
           [System.IO.File]::WriteAllText($syntheticFiles[2], '{"synthetic-history":true}')
-          [System.IO.File]::WriteAllText($syntheticFiles[3], '{"synthetic-style":true}')
+          [System.IO.File]::WriteAllText($syntheticFiles[3], '{"schema_version":1,"id":"synthetic-style","name":"Synthetic style","layout":"paper","elements":{}}')
           $expectedHashes = @{}
           foreach ($file in $syntheticFiles) {
             $expectedHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
@@ -209,7 +209,7 @@ jobs:
               $arguments = @(
                 "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
                 ('/DIR="{0}"' -f $installDir),
-                "/TASKS="
+                "/MERGETASKS=!desktopicon,!autostart"
               )
               $process = Start-Process -FilePath $setup -ArgumentList $arguments -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -PassThru
               if (-not $process.WaitForExit(120000)) {

@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -109,7 +111,12 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("Build-Installer.ps1 -SkipAppBuild", self.workflow)
         self.assertIn("RUNNER_TEMP", self.workflow)
         self.assertIn("USERPROFILE", self.workflow)
-        self.assertIn("synthetic-settings", self.workflow)
+        self.assertIn('"auto_start":false', self.workflow)
+        self.assertIn('"ui_id":"synthetic-style"', self.workflow)
+        self.assertIn('"schema_version":1,"id":"synthetic-style"', self.workflow)
+        self.assertIn('"profiles":{"codex"', self.workflow)
+        self.assertIn("/MERGETASKS=!desktopicon,!autostart", self.workflow)
+        self.assertNotIn('"/TASKS="', self.workflow)
         self.assertIn('"My Agent Desk"', self.workflow)
         self.assertIn("[IO.Path]::GetFullPath($installDir).TrimEnd", self.workflow)
         self.assertIn("[string]::Equals($normalizedRegisteredLocation, $expectedLocation, [StringComparison]::OrdinalIgnoreCase)", self.workflow)
@@ -127,6 +134,35 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("installation.ini", self.workflow)
         self.assertIn("KV-Agent-Desk-Setup.exe", self.workflow)
         self.assertIn("KV-Agent-Desk-Setup.exe.sha256", self.workflow)
+
+    def test_setup_smoke_seeds_valid_user_state_with_autostart_off(self):
+        from agent_dashboard.settings import AppSettings
+        from agent_dashboard.subscriptions import SubscriptionProfiles
+        from agent_dashboard.ui_profiles import UIProfiles
+
+        def fixture(index):
+            match = re.search(
+                rf"WriteAllText\(\$syntheticFiles\[{index}\], '([^']*)'\)",
+                self.workflow,
+            )
+            self.assertIsNotNone(match)
+            return json.loads(match.group(1))
+
+        settings = fixture(0)
+        self.assertFalse(settings["auto_start"])
+        self.assertEqual(settings["ui_id"], "synthetic-style")
+        AppSettings(None).update(settings)
+
+        subscriptions = fixture(1)
+        self.assertEqual(subscriptions["version"], 1)
+        self.assertEqual(set(subscriptions["profiles"]), {"codex", "zcode", "antigravity"})
+        for profile in subscriptions["profiles"].values():
+            SubscriptionProfiles.validate(profile)
+
+        style = fixture(3)
+        self.assertEqual(style["schema_version"], 1)
+        self.assertEqual(style["id"], "synthetic-style")
+        UIProfiles(None).import_profile(style)
 
 
 class InstallerPayloadTests(unittest.TestCase):
