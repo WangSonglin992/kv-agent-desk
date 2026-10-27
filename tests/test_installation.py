@@ -307,6 +307,37 @@ class InstallationTests(unittest.TestCase):
             self.assertFalse(shortcut.called)
             launch.assert_called_once_with(target, background=True, state_dir=state_dir)
 
+    def test_managed_update_and_same_hash_relaunch_keep_inno_shortcut_without_shell_helper(self):
+        with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
+            root = Path(folder)
+            state_dir = self.fixture_state
+            install_dir = root / "managed program"
+            install_dir.mkdir()
+            target = install_dir / "KV-Agent-Desk.exe"
+            target.write_bytes(b"old installed executable")
+            source = root / "candidate.exe"
+            source.write_bytes(b"synthetic new release")
+            registry = FakeRegistrationRegistry()
+            with (
+                patch.object(install_location_module, "_winreg", registry),
+                patch.object(install_location_module, "_is_windows", return_value=True),
+                patch.object(installation, "_is_windows", return_value=True),
+                patch.object(installation, "_handoff_existing_server", return_value=True),
+                patch.object(installation, "_read_server_state", return_value={}),
+                patch.object(installation, "_server_is_current_installed_version", return_value=True),
+                patch.object(installation, "ensure_desktop_shortcut", side_effect=AssertionError("Inno owns this shortcut")),
+                patch.object(installation, "_launch") as launch,
+            ):
+                install_location_module.register_installer_installation(
+                    install_dir, desktop_shortcut=True, state_dir=state_dir)
+                self.assertEqual(installation.install_current(source, state_dir=state_dir, background=True), target)
+                self.assertEqual(installation.install_current(source, state_dir=state_dir, background=True), target)
+                record = install_location_module.read_installation()
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            self.assertTrue(record.desktop_shortcut)
+            self.assertTrue(record.installer_managed)
+            launch.assert_called_once_with(target, background=True, state_dir=state_dir)
+
     def test_same_hash_with_unsupported_portable_server_hands_off_before_launch(self):
         with tempfile.TemporaryDirectory(dir=self.fixture_folder.name) as folder:
             root = Path(folder)

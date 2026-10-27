@@ -874,13 +874,14 @@ def _prepare_installed_launch(args: argparse.Namespace) -> bool:
     if not args.install and not _default_native_install_mode(args):
         return False
     from .installation import ensure_desktop_shortcut, install_current, is_installed
-    from .install_location import desktop_shortcut_enabled
+    from .install_location import read_installation
     executable = Path(sys.executable)
     if args.install or not is_installed(executable):
         install_current(executable, state_dir=args.state_dir, background=args.background)
         return True
     try:
-        if desktop_shortcut_enabled():
+        record = read_installation()
+        if record.desktop_shortcut and not record.installer_managed:
             ensure_desktop_shortcut(executable)
     except (OSError, RuntimeError, ValueError):
         logging.warning("Could not refresh desktop shortcut")

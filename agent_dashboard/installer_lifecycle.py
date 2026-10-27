@@ -127,29 +127,6 @@ def _read_previous_installation() -> install_location.Installation:
     return install_location.read_installation()
 
 
-def _owned_shortcut_targets(executable: Path,
-                            previous: install_location.Installation | None) -> list[Path]:
-    targets = [executable]
-    if previous is not None and previous.registered:
-        targets.append(previous.directory / _EXECUTABLE_NAME)
-    targets.append(installation.legacy_installation_executable())
-    result: list[Path] = []
-    known: set[str] = set()
-    for target in targets:
-        candidate = Path(target)
-        if not candidate.is_absolute() or candidate.suffix.casefold() != ".exe":
-            continue
-        try:
-            resolved = candidate.resolve()
-            identity = os.path.normcase(str(resolved))
-        except (OSError, RuntimeError, ValueError):
-            continue
-        if identity not in known:
-            known.add(identity)
-            result.append(resolved)
-    return result
-
-
 def _finish_installer(install_dir: Path, desktop_shortcut: bool, auto_start: bool) -> None:
     _require_frozen_windows()
     if type(desktop_shortcut) is not bool or type(auto_start) is not bool:
@@ -157,7 +134,7 @@ def _finish_installer(install_dir: Path, desktop_shortcut: bool, auto_start: boo
     target_dir = _validate_install_directory(install_dir)
     executable = _current_executable(target_dir)
     state_dir = _canonical_state_directory()
-    previous = _read_previous_installation()
+    _read_previous_installation()
 
     settings = AppSettings(state_dir / "settings.json")
     previous_settings = settings.get()
@@ -168,12 +145,9 @@ def _finish_installer(install_dir: Path, desktop_shortcut: bool, auto_start: boo
     install_location.register_installer_installation(
         target_dir, desktop_shortcut=desktop_shortcut, state_dir=state_dir
     )
-    if desktop_shortcut:
-        installation.ensure_desktop_shortcut(executable)
-    else:
-        installation.remove_owned_desktop_shortcut(
-            _owned_shortcut_targets(executable, previous)
-        )
+    # Setup's [Icons] entries create the selected links, and its Pascal
+    # callback handles an opt-out. Keep shell shortcut operations out of this
+    # process so Setup does not wait on an external PowerShell/COM child.
 
     command = [str(executable), "--background", "--state-dir", str(state_dir.resolve())]
     set_autostart(auto_start, command)

@@ -1,3 +1,3 @@
 """Local Windows dashboard for Thermalright KV 9.16 LCD."""
 
-__version__ = "0.7.4"
+__version__ = "0.7.5"

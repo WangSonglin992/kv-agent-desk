@@ -74,6 +74,18 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn("--auto-start ", self.definition)
         self.assertIn("WizardIsTaskSelected('autostart')", self.definition)
         self.assertIn("'--installer-uninstall'", self.definition)
+        self.assertIn("CreateOleObject('WScript.Shell')", self.definition)
+        self.assertIn("if not FileExists(ShortcutFilename)", self.definition)
+        self.assertIn("function NormalizeExistingExecutable(const Filename: string)", self.definition)
+        self.assertIn("GetShortName(ExpandFileName(Filename))", self.definition)
+        self.assertIn("PathSame(NormalizedTarget, NormalizedCurrent)", self.definition)
+        self.assertIn("PathSame(NormalizedTarget, NormalizedPrevious)", self.definition)
+        self.assertIn("DeleteFile(ShortcutFilename)", self.definition)
+        self.assertIn("function GetCustomSetupExitCode(): Integer", self.definition)
+        self.assertIn("Result := 73", self.definition)
+        self.assertIn("FinishFailed := True", self.definition)
+        self.assertIn("FinishFailed := False", self.definition)
+        self.assertNotIn("powershell.exe", self.definition.casefold())
         self.assertIn("Setup stopped before replacing any app files", self.definition)
         self.assertNotIn("[UninstallDelete]", self.definition)
         self.assertNotIn("DelTree(", self.definition)
@@ -88,7 +100,8 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertNotIn("[UninstallDelete]", self.definition)
         self.assertNotIn("DelTree(", self.definition)
         self.assertNotIn("RemoveDir(", self.definition)
-        self.assertNotIn("DeleteFile(", self.definition)
+        uninstall_hook = self.definition.split("function InitializeUninstall()", 1)[1]
+        self.assertNotIn("DeleteFile(", uninstall_hook)
 
     def test_setup_payload_sources_are_explicit_and_exclude_private_state(self):
         self.assertIn("{#SetupPayload}\\KV-Agent-Desk.exe", self.definition)

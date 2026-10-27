@@ -1,9 +1,15 @@
 # Changelog
 
+## 0.7.5
+
+- Let Setup own shortcut creation and validated removal, avoiding a second PowerShell shortcut process during installation.
+- Return a failed Setup exit code if saving installation options fails.
+
 ## 0.7.4
 
 - Preserve Setup shortcut/startup task choices across reinstalls; remove `checkedonce` and retain prior selections.
 - Cover default-on install/reinstall and explicit opt-out/reinstall cases with a four-stage regression matrix.
+- Release CI exposed a timeout in the remaining runtime shortcut helper during opt-out; no Release was published. Keep the tag.
 
 ## 0.7.3
 

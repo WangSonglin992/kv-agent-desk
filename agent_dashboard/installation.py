@@ -358,7 +358,7 @@ def install_current(source: Path, *, state_dir: Path, background: bool = False) 
         state_dir = Path(state_dir)
         record = register_legacy_installation(target.parent, state_dir=state_dir)
         _sync_display_version_for_canonical_install(target, state_dir)
-        if record.desktop_shortcut:
+        if record.desktop_shortcut and not record.installer_managed:
             ensure_desktop_shortcut(target)
         if _server_is_current_installed_version(_read_server_state()):
             if background or _request_existing_server(show=True):
@@ -398,7 +398,8 @@ def install_current(source: Path, *, state_dir: Path, background: bool = False) 
         _handoff_existing_server()
     record = register_legacy_installation(target.parent, state_dir=state_dir)
     _sync_display_version_for_canonical_install(target, state_dir)
-    if record.desktop_shortcut:
+    # Inno owns managed shortcuts; the executable and its launch path stay fixed.
+    if record.desktop_shortcut and not record.installer_managed:
         ensure_desktop_shortcut(target)
     _launch(target, background=background, state_dir=state_dir)
     return target

@@ -214,43 +214,43 @@ jobs:
             )
             Write-Output ("synthetic_setup_attempt={0}" -f $Attempt)
             Write-Output ("synthetic_cli_task_parameter={0}" -f $TaskParameter)
-            if (-not (Test-Path -LiteralPath $SaveInfPath -PathType Leaf)) {
-              Write-Output "synthetic_selected_tasks=saveinf_missing"
-              return
-            }
-            $taskRecord = Select-String -LiteralPath $SaveInfPath -Pattern '^\s*Tasks\s*=' | Select-Object -First 1
-            if (-not $taskRecord) {
-              Write-Output "synthetic_selected_tasks=task_record_missing"
-              return
-            }
-            $taskList = $taskRecord.Line.Split('=', 2)[1].Trim()
-            $safeTaskNames = @()
-            foreach ($taskName in $taskList.Split(',')) {
-              if ($safeTaskNames.Count -ge 8) { break }
-              $candidate = $taskName.Trim()
-              if ($candidate -in @("desktopicon", "autostart")) {
-                $safeTaskNames += $candidate
-              } elseif ($candidate.Length -gt 0) {
-                $safeTaskNames += "unknown"
+            if (Test-Path -LiteralPath $SaveInfPath -PathType Leaf) {
+              $taskRecord = Select-String -LiteralPath $SaveInfPath -Pattern '^\s*Tasks\s*=' | Select-Object -First 1
+              if ($taskRecord) {
+                $taskList = $taskRecord.Line.Split('=', 2)[1].Trim()
+                $safeTaskNames = @()
+                foreach ($taskName in $taskList.Split(',')) {
+                  if ($safeTaskNames.Count -ge 8) { break }
+                  $candidate = $taskName.Trim()
+                  if ($candidate -in @("desktopicon", "autostart")) {
+                    $safeTaskNames += $candidate
+                  } elseif ($candidate.Length -gt 0) {
+                    $safeTaskNames += "unknown"
+                  }
+                }
+                if ($safeTaskNames.Count -eq 0) {
+                  Write-Output "synthetic_selected_tasks=none"
+                } else {
+                  Write-Output ("synthetic_selected_tasks={0}" -f ($safeTaskNames -join ","))
+                }
+              } else {
+                Write-Output "synthetic_selected_tasks=task_record_missing"
               }
-            }
-            if ($safeTaskNames.Count -eq 0) {
-              Write-Output "synthetic_selected_tasks=none"
             } else {
-              Write-Output ("synthetic_selected_tasks={0}" -f ($safeTaskNames -join ","))
+              Write-Output "synthetic_selected_tasks=saveinf_missing"
             }
             if (-not (Test-Path -LiteralPath $SetupLogPath -PathType Leaf)) {
               Write-Output "synthetic_finish_cli_choices=setup_log_missing"
-              return
-            }
-            $finishChoiceLine = Select-String -LiteralPath $SetupLogPath -Pattern 'KV task desktop=[01] autostart=[01]' |
-              Select-Object -Last 1
-            if ($finishChoiceLine -and
-                $finishChoiceLine.Line -match 'KV task desktop=([01]) autostart=([01])') {
-              Write-Output ("synthetic_finish_cli_desktop_shortcut={0}" -f $Matches[1])
-              Write-Output ("synthetic_finish_cli_auto_start={0}" -f $Matches[2])
             } else {
-              Write-Output "synthetic_finish_cli_choices=not_logged"
+              $finishChoiceLine = Select-String -LiteralPath $SetupLogPath -Pattern 'KV task desktop=[01] autostart=[01]' |
+                Select-Object -Last 1
+              if ($finishChoiceLine -and
+                  $finishChoiceLine.Line -match 'KV task desktop=([01]) autostart=([01])') {
+                Write-Output ("synthetic_finish_cli_desktop_shortcut={0}" -f $Matches[1])
+                Write-Output ("synthetic_finish_cli_auto_start={0}" -f $Matches[2])
+              } else {
+                Write-Output "synthetic_finish_cli_choices=not_logged"
+              }
             }
           }
           $savedUserProfile = $env:USERPROFILE

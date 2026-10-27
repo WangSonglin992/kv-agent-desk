@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.7.4"
+  #define AppVersion "0.7.5"
 #endif
 #define SetupPayload GetEnv("KV_SETUP_PAYLOAD")
 
@@ -62,6 +62,7 @@ var
   SavedInstallDir: string;
   SavedDesktopShortcut: string;
   DirectoryDefaultApplied: Boolean;
+  FinishFailed: Boolean;
 
 function InstallationIniPath(): string;
 begin
@@ -110,10 +111,11 @@ end;
 
 function InitializeSetup(): Boolean;
 var
-  IniPath: string;
+  IniPath, RegistryDir: string;
 begin
   IniPath := InstallationIniPath();
   Result := True;
+  FinishFailed := False;
   if FileExists(IniPath) or DirExists(IniPath) then begin
     if not ReadInstallationIni(SavedInstallDir, SavedDesktopShortcut) then begin
       SuppressibleMsgBox(
@@ -122,6 +124,9 @@ begin
       Result := False;
       Exit;
     end;
+  end else if RegQueryStringValue(HKEY_CURRENT_USER, InstallRegistrySubkey, 'InstallDir', RegistryDir) and
+     IsAbsoluteInstallDir(RegistryDir) then begin
+    SavedInstallDir := RegistryDir;
   end;
 end;
 
@@ -134,8 +139,14 @@ begin
     Exit;
   end;
 
+  if (SavedInstallDir <> '') and IsAbsoluteInstallDir(SavedInstallDir) then begin
+    Result := SavedInstallDir;
+    Exit;
+  end;
+
   if RegQueryStringValue(HKEY_CURRENT_USER, InstallRegistrySubkey, 'InstallDir', RegistryDir) and
      IsAbsoluteInstallDir(RegistryDir) then begin
+    SavedInstallDir := RegistryDir;
     Result := RegistryDir;
     Exit;
   end;
@@ -185,6 +196,61 @@ begin
     Result := 'KV Agent Desk could not prepare the current installation. Setup stopped before replacing any app files.';
 end;
 
+function NormalizeExistingExecutable(const Filename: string): string;
+begin
+  Result := '';
+  if not FileExists(Filename) then
+    Exit;
+  Result := PathNormalizeSlashes(GetShortName(ExpandFileName(Filename)));
+end;
+
+procedure RemoveOwnedDesktopShortcut;
+var
+  Shell, Shortcut: Variant;
+  ShortcutFilename, TargetPath, CurrentExecutable, PreviousExecutable: string;
+  NormalizedTarget, NormalizedCurrent, NormalizedPrevious: string;
+begin
+  ShortcutFilename := ExpandConstant('{userdesktop}\KV Agent Desk.lnk');
+  if not FileExists(ShortcutFilename) then
+    Exit;
+
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Shortcut := Shell.CreateShortcut(ShortcutFilename);
+    TargetPath := Shortcut.TargetPath;
+  except
+    FinishFailed := True;
+    RaiseException('KV Agent Desk could not verify desktop shortcut ownership.');
+    Exit;
+  end;
+
+  if not IsAbsoluteInstallDir(ExtractFileDir(TargetPath)) then
+    Exit;
+  CurrentExecutable := ExpandConstant('{app}\KV-Agent-Desk.exe');
+  NormalizedTarget := NormalizeExistingExecutable(TargetPath);
+  NormalizedCurrent := NormalizeExistingExecutable(CurrentExecutable);
+  if (NormalizedTarget <> '') and (NormalizedCurrent <> '') and
+     PathSame(NormalizedTarget, NormalizedCurrent) then begin
+    if not DeleteFile(ShortcutFilename) then begin
+      FinishFailed := True;
+      RaiseException('KV Agent Desk could not remove its desktop shortcut.');
+    end;
+    Exit;
+  end;
+
+  if (SavedInstallDir <> '') and IsAbsoluteInstallDir(SavedInstallDir) then begin
+    PreviousExecutable := SavedInstallDir + '\KV-Agent-Desk.exe';
+    NormalizedPrevious := NormalizeExistingExecutable(PreviousExecutable);
+    if (NormalizedTarget <> '') and (NormalizedPrevious <> '') and
+       PathSame(NormalizedTarget, NormalizedPrevious) then begin
+      if not DeleteFile(ShortcutFilename) then begin
+        FinishFailed := True;
+        RaiseException('KV Agent Desk could not remove its previous desktop shortcut.');
+      end;
+    end;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   Parameters: string;
@@ -193,6 +259,7 @@ var
   ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then begin
+    FinishFailed := True;
     if WizardIsTaskSelected('desktopicon') then
       DesktopShortcutChoice := '1'
     else
@@ -206,12 +273,28 @@ begin
       ' --auto-start ' + AutoStartChoice;
     Log('KV task desktop=' + DesktopShortcutChoice + ' autostart=' + AutoStartChoice);
 
+    if DesktopShortcutChoice = '0' then
+      RemoveOwnedDesktopShortcut;
+
     if not Exec(ExpandConstant('{app}\KV-Agent-Desk.exe'), Parameters, '', SW_HIDE,
-       ewWaitUntilTerminated, ResultCode) then
+       ewWaitUntilTerminated, ResultCode) then begin
+      FinishFailed := True;
       RaiseException('KV Agent Desk could not save the selected installation options. Run Setup again to repair this installation.');
-    if ResultCode <> 0 then
+    end;
+    if ResultCode <> 0 then begin
+      FinishFailed := True;
       RaiseException('KV Agent Desk could not save the selected installation options. Run Setup again to repair this installation.');
+    end;
+    FinishFailed := False;
   end;
+end;
+
+function GetCustomSetupExitCode(): Integer;
+begin
+  if FinishFailed then
+    Result := 73
+  else
+    Result := 0;
 end;
 
 function InitializeUninstall(): Boolean;

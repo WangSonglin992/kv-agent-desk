@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import agent_dashboard.app as app_module
+import agent_dashboard.install_location as install_location
 from agent_dashboard.app import Dashboard, parser
 
 
@@ -73,11 +74,31 @@ class InstallationEntryTests(unittest.TestCase):
             with patch.object(app_module, "_default_native_install_mode", return_value=True), \
                     patch("agent_dashboard.installation.is_installed", return_value=True), \
                     patch("agent_dashboard.installation.install_current") as install, \
-                    patch("agent_dashboard.install_location.desktop_shortcut_enabled", return_value=True), \
+                    patch("agent_dashboard.install_location.read_installation",
+                          return_value=install_location.Installation(
+                              Path(folder), desktop_shortcut=True,
+                              installer_managed=False, registered=True)), \
                     patch("agent_dashboard.installation.ensure_desktop_shortcut") as shortcut:
                 self.assertFalse(app_module._prepare_installed_launch(args))
             install.assert_not_called()
             shortcut.assert_called_once_with(Path(app_module.sys.executable))
+
+    def test_setup_managed_shortcut_is_not_repaired_by_normal_launch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args = parser().parse_args(["--state-dir", folder])
+            setup_record = install_location.Installation(
+                Path(folder), desktop_shortcut=True,
+                installer_managed=True, registered=True,
+            )
+            with patch.object(app_module, "_default_native_install_mode", return_value=True), \
+                    patch("agent_dashboard.installation.is_installed", return_value=True), \
+                    patch("agent_dashboard.installation.install_current") as install, \
+                    patch("agent_dashboard.install_location.read_installation",
+                          return_value=setup_record), \
+                    patch("agent_dashboard.installation.ensure_desktop_shortcut") as shortcut:
+                self.assertFalse(app_module._prepare_installed_launch(args))
+            install.assert_not_called()
+            shortcut.assert_not_called()
 
     def test_failed_update_launch_does_not_stop_the_current_dashboard(self):
         with tempfile.TemporaryDirectory() as folder:

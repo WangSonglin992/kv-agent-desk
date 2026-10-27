@@ -158,21 +158,6 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertFalse(diagnostic.exists())
 
-    def test_shortcut_targets_are_resolved_and_deduplicated_for_synthetic_aliases(self):
-        install_dir = self.root / "synthetic install"
-        executable = self.executable(install_dir)
-        alias_component = self.root / "synthetic alias"
-        alias_component.mkdir()
-        alias_executable = alias_component / ".." / install_dir.name / "KV-Agent-Desk.exe"
-        previous = install_location.Installation(install_dir, registered=True)
-
-        with patch.object(installation, "legacy_installation_executable", return_value=alias_executable):
-            targets = lifecycle._owned_shortcut_targets(alias_executable, previous)
-
-        self.assertEqual(targets, [executable.resolve()])
-        self.assertTrue(targets[0].is_absolute())
-        self.assertNotIn("..", targets[0].parts)
-
     def test_finish_preserves_settings_bytes_when_auto_start_already_matches(self):
         install_dir = self.root / "registered install"
         executable = self.executable(install_dir)
@@ -183,10 +168,14 @@ class InstallerLifecycleTests(unittest.TestCase):
 
         with patch.object(installation, "ensure_desktop_shortcut") as ensure, \
                 patch.object(installation, "remove_owned_desktop_shortcut") as remove, \
+                patch.object(installation.subprocess, "run",
+                             side_effect=AssertionError("finish must not launch a process")), \
+                patch.object(installation.subprocess, "Popen",
+                             side_effect=AssertionError("finish must not launch a process")), \
                 patch.object(lifecycle, "set_autostart") as set_run:
             lifecycle._finish_installer(install_dir, True, True)
 
-        ensure.assert_called_once_with(executable.resolve())
+        ensure.assert_not_called()
         remove.assert_not_called()
         set_run.assert_called_once_with(
             True,
@@ -198,7 +187,7 @@ class InstallerLifecycleTests(unittest.TestCase):
         self.assertTrue(record.desktop_shortcut)
         self.assertTrue(record.installer_managed)
 
-    def test_finish_shortcut_opt_out_removes_only_registered_old_and_current_targets(self):
+    def test_finish_shortcut_opt_out_persists_choice_without_shell_processes(self):
         old_dir = self.root / "old registered install"
         new_dir = self.root / "new registered install"
         executable = self.executable(new_dir)
@@ -210,15 +199,15 @@ class InstallerLifecycleTests(unittest.TestCase):
 
         with patch.object(installation, "ensure_desktop_shortcut") as ensure, \
                 patch.object(installation, "remove_owned_desktop_shortcut") as remove, \
+                patch.object(installation.subprocess, "run",
+                             side_effect=AssertionError("finish must not launch a process")), \
+                patch.object(installation.subprocess, "Popen",
+                             side_effect=AssertionError("finish must not launch a process")), \
                 patch.object(lifecycle, "set_autostart") as set_run:
             lifecycle._finish_installer(new_dir, False, False)
 
         ensure.assert_not_called()
-        targets = remove.call_args.args[0]
-        resolved = {Path(path).resolve() for path in targets}
-        self.assertIn(executable.resolve(), resolved)
-        self.assertIn((old_dir / "KV-Agent-Desk.exe").resolve(), resolved)
-        self.assertNotIn((self.root / "someone-else" / "KV-Agent-Desk.exe").resolve(), resolved)
+        remove.assert_not_called()
         set_run.assert_called_once_with(
             False,
             [str(executable.resolve()), "--background", "--state-dir", str(self.state_dir.resolve())],
@@ -234,11 +223,13 @@ class InstallerLifecycleTests(unittest.TestCase):
         before = settings_file.read_bytes()
 
         with patch.object(installation, "ensure_desktop_shortcut") as ensure, \
+                patch.object(installation, "remove_owned_desktop_shortcut") as remove, \
                 patch.object(lifecycle, "set_autostart") as set_run:
             with self.assertRaisesRegex(ValueError, "does not match"):
                 lifecycle._finish_installer(selected, False, True)
 
         ensure.assert_not_called()
+        remove.assert_not_called()
         set_run.assert_not_called()
         self.assertEqual(settings_file.read_bytes(), before)
         self.assertFalse(install_location.installation_ini_path(self.state_dir).exists())
