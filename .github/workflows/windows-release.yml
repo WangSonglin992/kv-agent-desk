@@ -264,11 +264,71 @@ jobs:
             }
 
             $uninstaller = Join-Path $installDir "unins000.exe"
+            $uninstallerLog = Join-Path $smokeRoot "uninstaller.log"
             $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
-              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"
+              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
+              ('/LOG="{0}"' -f $uninstallerLog)
             ) -WorkingDirectory $installDir -WindowStyle Hidden -Wait -PassThru
-            if ($uninstallProcess.ExitCode -ne 0) {
-              throw "Isolated Setup uninstall exited with code $($uninstallProcess.ExitCode)"
+            $uninstallExitCode = $uninstallProcess.ExitCode
+            $uninstallProcess.Dispose()
+            if ($uninstallExitCode -ne 0) {
+              Write-Output "Synthetic uninstaller diagnostic summary:"
+              Write-Output ("USERPROFILE_matches_synthetic={0}" -f [string]::Equals($env:USERPROFILE, $syntheticProfile, [StringComparison]::OrdinalIgnoreCase))
+              Write-Output ("synthetic_profile_exists={0}" -f (Test-Path -LiteralPath $syntheticProfile -PathType Container))
+              Write-Output ("synthetic_state_exists={0}" -f (Test-Path -LiteralPath $state -PathType Container))
+              Write-Output ("synthetic_installation_ini_exists={0}" -f (Test-Path -LiteralPath (Join-Path $state "installation.ini") -PathType Leaf))
+              Write-Output ("synthetic_hkcu_mirror_exists={0}" -f (Test-Path -LiteralPath "HKCU:\Software\KV-Agent-Desk"))
+              Write-Output ("synthetic_uninstall_entry_exists={0}" -f (Test-Path -LiteralPath $uninstallKey))
+              Write-Output ("synthetic_install_dir_exists={0}" -f (Test-Path -LiteralPath $installDir -PathType Container))
+              Write-Output ("uninstaller_exit_code={0}" -f $uninstallExitCode)
+              if (Test-Path -LiteralPath $uninstallerLog -PathType Leaf) {
+                $uninstallerLogText = [System.IO.File]::ReadAllText($uninstallerLog)
+                if ($uninstallerLogText -match 'InitializeUninstall returned False; aborting\.') {
+                  Write-Output "inno_marker=InitializeUninstall_returned_false"
+                } elseif ($uninstallerLogText -match 'InitializeUninstall raised an exception \(fatal\)\.') {
+                  Write-Output "inno_marker=InitializeUninstall_raised_exception"
+                } else {
+                  Write-Output "inno_marker=no_InitializeUninstall_failure_marker"
+                }
+              } else {
+                Write-Output "inno_marker=uninstaller_log_missing"
+              }
+              $lifecycleDiagnostic = Join-Path $env:RUNNER_TEMP "kv-agent-installer-lifecycle-diagnostic.json"
+              if (Test-Path -LiteralPath $lifecycleDiagnostic -PathType Leaf) {
+                try {
+                  $diagnostic = Get-Content -LiteralPath $lifecycleDiagnostic -Raw | ConvertFrom-Json -ErrorAction Stop
+                  $allowedDiagnosticFields = @("mode", "exception_type", "traceback_functions", "reason")
+                  $unexpectedFields = @($diagnostic.PSObject.Properties.Name | Where-Object { $_ -notin $allowedDiagnosticFields })
+                  if ($unexpectedFields.Count -gt 0) {
+                    Write-Output "runtime_lifecycle_diagnostic=unexpected_schema_values_suppressed"
+                  } else {
+                    $diagnosticMode = [string]$diagnostic.mode
+                    if ($diagnosticMode -notin @("prepare", "finish", "uninstall")) { $diagnosticMode = "invalid" }
+                    $diagnosticType = [string]$diagnostic.exception_type
+                    if ($diagnosticType -notmatch '^[A-Za-z_][A-Za-z0-9_]{0,63}$') { $diagnosticType = "invalid" }
+                    $diagnosticReason = [string]$diagnostic.reason
+                    if ($diagnosticReason -notin @("not_owned", "exe_mismatch", "appid_mismatch", "registered_path_mismatch", "registration_clear_failed", "invalid_installation_record", "unclassified")) {
+                      $diagnosticReason = "invalid"
+                    }
+                    $safeFunctionNames = @()
+                    foreach ($functionName in @($diagnostic.traceback_functions)) {
+                      if ($safeFunctionNames.Count -ge 20) { break }
+                      if ($functionName -is [string] -and $functionName -match '^[A-Za-z_][A-Za-z0-9_]{0,63}$') {
+                        $safeFunctionNames += $functionName
+                      }
+                    }
+                    Write-Output ("runtime_lifecycle_mode={0}" -f $diagnosticMode)
+                    Write-Output ("runtime_lifecycle_exception_type={0}" -f $diagnosticType)
+                    Write-Output ("runtime_lifecycle_reason={0}" -f $diagnosticReason)
+                    Write-Output ("runtime_lifecycle_traceback_functions={0}" -f ($safeFunctionNames -join ","))
+                  }
+                } catch {
+                  Write-Output "runtime_lifecycle_diagnostic=invalid_json_values_suppressed"
+                }
+              } else {
+                Write-Output "runtime_lifecycle_diagnostic=missing"
+              }
+              throw "Isolated Setup uninstall exited with code $uninstallExitCode"
             }
             if (Test-Path -LiteralPath $installDir) {
               throw "Setup uninstall left program files in the isolated installation directory"
@@ -293,6 +353,17 @@ jobs:
           } finally {
             $env:USERPROFILE = $savedUserProfile
           }
+
+      - name: Upload synthetic installer failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: KV-Agent-Desk-installer-diagnostics-${{ github.run_number }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/kv-agent-installer-lifecycle-diagnostic.json
+            ${{ runner.temp }}/kv-agent-desk-setup-smoke-${{ github.run_id }}-${{ github.run_attempt }}/uninstaller.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Package portable ZIP
         shell: pwsh

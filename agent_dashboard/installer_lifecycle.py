@@ -8,10 +8,12 @@ operate on the canonical per-user store.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 from pathlib import Path, PureWindowsPath
 import sys
+import traceback
 
 from . import install_location, installation
 from .paths import user_state_directory
@@ -19,6 +21,16 @@ from .settings import AppSettings, set_autostart
 
 
 _EXECUTABLE_NAME = "KV-Agent-Desk.exe"
+_DIAGNOSTIC_FILENAME = "kv-agent-installer-lifecycle-diagnostic.json"
+_FIXED_VALUE_ERROR_REASONS = {
+    "no owned Setup installation is registered": "not_owned",
+    "current executable is not KV-Agent-Desk.exe": "exe_mismatch",
+    "current executable does not match the selected installation directory": "exe_mismatch",
+    "owned Setup AppId does not match the current installation": "appid_mismatch",
+    "uninstall directory does not match the registered installation": "registered_path_mismatch",
+    "owned Setup installation registration could not be cleared": "registration_clear_failed",
+    "installation record is invalid": "invalid_installation_record",
+}
 
 
 def _lifecycle_parser() -> argparse.ArgumentParser:
@@ -226,6 +238,43 @@ def _uninstall_installer() -> None:
         raise ValueError("owned Setup installation registration could not be cleared")
 
 
+def _diagnostic_reason_code(exc: Exception) -> str:
+    if type(exc) is ValueError:
+        return _FIXED_VALUE_ERROR_REASONS.get(str(exc), "unclassified")
+    return "unclassified"
+
+
+def _write_ci_lifecycle_diagnostic(mode: str, exc: Exception) -> None:
+    """Write a sanitized failure summary only on an explicitly marked CI runner."""
+    try:
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            return
+        runner_temp = os.environ.get("RUNNER_TEMP")
+        if not isinstance(runner_temp, str) or not runner_temp.strip():
+            return
+        root = Path(runner_temp)
+        if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+            return
+        root = root.resolve(strict=True)
+        destination = root / _DIAGNOSTIC_FILENAME
+        if destination.is_symlink() or (destination.exists() and not destination.is_file()):
+            return
+
+        function_names = [frame.name for frame in traceback.extract_tb(exc.__traceback__)
+                          if isinstance(frame.name, str)]
+        payload = {
+            "mode": mode,
+            "exception_type": type(exc).__name__,
+            "traceback_functions": function_names,
+            "reason": _diagnostic_reason_code(exc),
+        }
+        destination.write_text(json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                               encoding="utf-8")
+    except Exception:
+        # Diagnostics must not change lifecycle success/failure behavior.
+        return
+
+
 def handle_installer_lifecycle(argv: list[str] | None = None) -> int | None:
     """Handle a frozen Setup command, or return ``None`` for an ordinary launch."""
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -245,6 +294,7 @@ def handle_installer_lifecycle(argv: list[str] | None = None) -> int | None:
             _uninstall_installer()
     except Exception as exc:
         logging.error("Installer lifecycle action failed: %s", type(exc).__name__)
+        _write_ci_lifecycle_diagnostic(args.mode, exc)
         return 1
     return 0
 

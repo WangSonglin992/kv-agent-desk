@@ -1,5 +1,7 @@
 import hashlib
 from contextlib import ExitStack
+import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -128,6 +130,33 @@ class InstallerLifecycleTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 lifecycle.handle_installer_lifecycle(["--installer-prepare", "--portable"])
         prepare.assert_not_called()
+
+    def test_ci_diagnostic_contains_only_sanitized_failure_metadata(self):
+        message = "owned Setup AppId does not match the current installation"
+        diagnostic = self.root / lifecycle._DIAGNOSTIC_FILENAME
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": str(self.root)}), \
+                patch.object(lifecycle, "_uninstall_installer", side_effect=ValueError(message)):
+            result = lifecycle.handle_installer_lifecycle(["--installer-uninstall"])
+
+        self.assertEqual(result, 1)
+        payload = json.loads(diagnostic.read_text(encoding="utf-8"))
+        self.assertEqual(payload["mode"], "uninstall")
+        self.assertEqual(payload["exception_type"], "ValueError")
+        self.assertEqual(payload["reason"], "appid_mismatch")
+        self.assertIn("handle_installer_lifecycle", payload["traceback_functions"])
+        serialized = json.dumps(payload)
+        self.assertNotIn(str(self.root), serialized)
+        self.assertNotIn(message, serialized)
+        self.assertEqual(set(payload), {"mode", "exception_type", "traceback_functions", "reason"})
+
+    def test_ci_diagnostic_is_not_written_outside_github_actions(self):
+        diagnostic = self.root / lifecycle._DIAGNOSTIC_FILENAME
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "false", "RUNNER_TEMP": str(self.root)}), \
+                patch.object(lifecycle, "_uninstall_installer", side_effect=ValueError("synthetic failure")):
+            result = lifecycle.handle_installer_lifecycle(["--installer-uninstall"])
+
+        self.assertEqual(result, 1)
+        self.assertFalse(diagnostic.exists())
 
     def test_shortcut_targets_are_resolved_and_deduplicated_for_synthetic_aliases(self):
         install_dir = self.root / "synthetic install"
