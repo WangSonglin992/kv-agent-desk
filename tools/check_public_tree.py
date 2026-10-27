@@ -10,9 +10,9 @@ import sys
 
 
 ROOT_FILES = {
-    ".gitignore", ".gitattributes", "README.md", "LICENSE", "CHANGELOG.md",
+    ".gitignore", ".gitattributes", "README.md", "LICENSE", "CHANGELOG.md", "AGENTS.md",
     "THIRD_PARTY_NOTICES.md", "pyproject.toml", "requirements.txt",
-    "requirements-build.lock.txt", "Build-Dashboard.ps1", "Start-Dashboard.cmd",
+    "requirements-build.lock.txt", "Build-Dashboard.ps1", "Build-Installer.ps1", "Start-Dashboard.cmd",
     "Stop-Dashboard.cmd", "run_dashboard.py",
 }
 ASSETS = {"app.ico", "deepseek.png", "deepseek.ico", "deepseek.svg", "chatgpt.png", "glm.png", "google.png", "SOURCES.md"}
@@ -36,6 +36,8 @@ def allowed(name):
         return len(path.parts) == 3 and path.name in ASSETS
     if name.startswith(("agent_dashboard/", "tests/", "tools/")):
         return path.suffix == ".py" and "__pycache__" not in path.parts
+    if name.startswith("installer/"):
+        return len(path.parts) == 2 and path.suffix == ".iss"
     if name.startswith("docs/"):
         return path.suffix == ".md"
     return name == ".github/workflows/windows-release.yml"

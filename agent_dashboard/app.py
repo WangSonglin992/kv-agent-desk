@@ -874,18 +874,24 @@ def _prepare_installed_launch(args: argparse.Namespace) -> bool:
     if not args.install and not _default_native_install_mode(args):
         return False
     from .installation import ensure_desktop_shortcut, install_current, is_installed
+    from .install_location import desktop_shortcut_enabled
     executable = Path(sys.executable)
     if args.install or not is_installed(executable):
         install_current(executable, state_dir=args.state_dir, background=args.background)
         return True
     try:
-        ensure_desktop_shortcut(executable)
-    except (OSError, RuntimeError):
+        if desktop_shortcut_enabled():
+            ensure_desktop_shortcut(executable)
+    except (OSError, RuntimeError, ValueError):
         logging.warning("Could not refresh desktop shortcut")
     return False
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .installer_lifecycle import handle_installer_lifecycle
+    installer_result = handle_installer_lifecycle(argv)
+    if installer_result is not None:
+        return installer_result
     args = parser().parse_args(argv)
     if not 1 <= args.port <= 65535 or args.interval < .5 or args.stale_seconds < 0:
         raise SystemExit("Invalid port/interval/stale timeout")

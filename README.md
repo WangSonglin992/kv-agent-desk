@@ -16,7 +16,7 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 - **手动套餐资料**：Codex、ZCode、Antigravity 均可手动补充套餐名称、规格和到期日期；手动填写优先显示，清空后恢复自动信息。
 - **保留最后可信数据**：来源暂不可读或数据过期时继续展示最后值，并用低调提示标记“数据待检查更新”；开机时先恢复上次屏幕画面，再更新来源数据。
 - **可视布局编辑**：点击预览选择元素，Ctrl 多选后可拖动、用方向键微调或输入 X/Y；支持对齐、等距分布和独立文字样式，字体来自本机字体库。草稿保存并应用后才更新屏幕；套餐、状态和额度仍由各自数据模块控制。详见 [布局与模板说明](docs/UI-TEMPLATES.md)。
-- **安装与自动更新**：Windows 发布版默认安装到固定的当前用户应用目录，创建并修复桌面快捷方式；后台检查稳定版本并校验更新文件。更新前备份本机设置、订阅和自定义布局，更新时只替换程序。
+- **安装与自动更新**：Windows Setup 默认安装至 `D:\APP\KV-Agent-Desk`，首装默认勾选桌面快捷方式与开机自启动；重装和升级使用登记的安装路径，并保留独立的本地历史与样式。
 
 
 ## 运行要求
@@ -32,9 +32,9 @@ KV Agent Desk 是面向 Windows 的本地 AI Agent 仪表盘，可将 Thermalrig
 
 ### Windows 发布版
 
-从 [GitHub Releases](https://github.com/WangSonglin992/kv-agent-desk/releases) 下载 `KV-Agent-Desk-windows-x64.zip`，解压后运行 `KV-Agent-Desk.exe`，无需安装 Python 或管理员权限。程序会安装到 `%LOCALAPPDATA%\Programs\KV-Agent-Desk\KV-Agent-Desk.exe`，并创建桌面的 **KV Agent Desk** 快捷方式；以后从这个固定入口打开。
+从 [GitHub Releases](https://github.com/WangSonglin992/kv-agent-desk/releases) 下载并运行 `KV-Agent-Desk-Setup.exe`，按向导选择安装位置。默认目录为 `D:\APP\KV-Agent-Desk`；桌面快捷方式和开机自启动默认勾选，复装沿用登记的目录与用户已选任务。
 
-Windows 用户数据统一保存在 `%USERPROFILE%\.kv-agent-desk`，与程序目录分开，避免打包宿主对 AppData 的重定向。首次升级自动迁移普通 LocalAppData 和 Codex 隔离目录内的旧记录；旧文件保留，迁移前另存备份，已有目标文件不覆盖。安装和更新前还会把 `settings.json`、`subscriptions.json` 及 `ui-profiles/*.json` 的原始文件备份到数据目录下的 `backups/install-*`；不会将内置样式覆盖到自定义副本。
+Windows 用户数据统一保存在 `%USERPROFILE%\.kv-agent-desk`，与程序目录分开。安装登记正本为该目录中的 UTF-16 BOM `installation.ini`（`[Installation]` / `InstallDir` / `DesktopShortcut` / `InstallerManaged`）；HKCU 应用键是镜像与回退。移动源码工作区不改变安装路径。首次安装先备份并迁移旧资料；更新只覆盖程序，卸载不删除该用户数据目录。
 
 桌面快捷方式和开机自启动都会明确传入同一本机数据目录。若登录初期配置或自定义样式暂不可读，程序保留已保存的选择并每 5 秒重试恢复，不把默认样式写回配置文件。
 

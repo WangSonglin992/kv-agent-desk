@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Add a Windows setup wizard defaulting to `D:\APP\KV-Agent-Desk`; first-install desktop shortcut and startup tasks are checked by default.
+- Store the installation identity at `%USERPROFILE%\.kv-agent-desk\installation.ini`; mirror it in the app-owned HKCU key so moving the source workspace does not change the install path.
+- Reinstall and upgrades use the registered directory; uninstall removes application files and owned startup/shortcut registrations while preserving user data, history and custom layouts.
+
 ## 0.6.2
 
 - 修复从 Windows 打包宿主启动与从桌面 Explorer 启动时，AppData 重定向导致读取不同配置的问题。Windows 用户数据统一放在 `%USERPROFILE%\.kv-agent-desk`。

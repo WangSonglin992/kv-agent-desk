@@ -73,6 +73,7 @@ class InstallationEntryTests(unittest.TestCase):
             with patch.object(app_module, "_default_native_install_mode", return_value=True), \
                     patch("agent_dashboard.installation.is_installed", return_value=True), \
                     patch("agent_dashboard.installation.install_current") as install, \
+                    patch("agent_dashboard.install_location.desktop_shortcut_enabled", return_value=True), \
                     patch("agent_dashboard.installation.ensure_desktop_shortcut") as shortcut:
                 self.assertFalse(app_module._prepare_installed_launch(args))
             install.assert_not_called()

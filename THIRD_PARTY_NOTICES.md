@@ -20,6 +20,8 @@ KV Agent Desk 本身按仓库根目录的 [MIT License](LICENSE) 发布。第三
 
 [PyInstaller](https://github.com/pyinstaller/pyinstaller) 用于构建 Windows 单文件程序，属于构建工具而非应用运行逻辑。其 GPLv2-or-later 许可包含用于由 PyInstaller 构建的可执行程序的例外条款；请同时阅读该仓库内当前版本的许可与例外文本。版本以 `requirements-build.lock.txt` 为准。
 
+Inno Setup 7.1.0 x64 用于构建 Windows Setup 安装器，属于构建工具，不包含在应用安装文件中。Inno Setup 及其文档的版权和使用条件见上游 [LICENSE.TXT](https://github.com/jrsoftware/issrc/blob/is-7_1_0/license.txt)。CI 在运行安装器前验证上游 GitHub Release Attestation 和 Authenticode 签名。
+
 ## 图片与界面参考
 
 - `agent_dashboard/assets/deepseek.svg` 来自 [DeepSeek-LLM 官方仓库](https://github.com/deepseek-ai/DeepSeek-LLM/blob/main/images/logo.svg)；`deepseek.ico` 来自 [DeepSeek 官方网站图标](https://www.deepseek.com/favicon.ico)，`deepseek.png` 从 ICO 原尺寸转换而来。商标归其权利人所有，图片仅用于识别相应账户卡片。

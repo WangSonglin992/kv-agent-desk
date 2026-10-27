@@ -32,6 +32,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 
 | 文件 | 保存内容 |
 | --- | --- |
+| `installation.ini` | 用户所选安装目录和 Setup 任务勾选；保存在本地并作为路径登记正本。卸载只移除此登记文件，不删除同目录的用户配置/历史。 |
 | `settings.json` | 显示方向、软件亮度、USB 开关、自启和无 5 小时额度的手动显示偏好。 |
 | `ui-profiles/*.json` | 用户保存或导入且通过校验的界面样式，包含配色、元素位置、字号、字体 ID、粗斜体等外观参数；不包含显示内容或数据绑定。 |
 | `last-frame-meta.json` | 最近画面对应的 UI 标识和样式校验摘要，避免恢复不匹配的外观。 |
@@ -46,7 +47,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 | `migration-backups/*` | 首次迁移前备份的旧版设置、样式和缓存，包含重名冲突文件；旧目录中的原文件保留。 |
 | `.legacy-state-migration-v1.json` | 仅含版本号的一次性迁移完成标记。 |
 
-程序安装目录为 `%LOCALAPPDATA%\Programs\KV-Agent-Desk`。更新只替换这个目录中的 EXE，并修复桌面快捷方式，不清空上述数据目录。
+程序安装目录由 `%USERPROFILE%\.kv-agent-desk\installation.ini` 中有效的 `InstallDir` 确定，HKCU 应用登记作为镜像/回退。Setup/更新仅管理该安装位置中的程序文件，不清除本机用户数据。
 
 首次迁移只检查当前用户的旧 `%LOCALAPPDATA%\KV-Agent-Desk`，以及 Codex 的 Windows 隔离目录内同名应用目录，复制固定清单中的设置、样式与缓存文件；不扫描其他应用的数据或凭据。迁移完成后使用新的独立目录，现有目标文件不会被覆盖。
 

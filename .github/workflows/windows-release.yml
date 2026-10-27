@@ -34,6 +34,47 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements-build.lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Download, verify, and install Inno Setup 7.1.0 x64
+        id: inno
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $toolRoot = Join-Path $env:RUNNER_TEMP "kv-agent-desk-inno-7.1.0"
+          $assetName = "innosetup-7.1.0-x64.exe"
+          $assetPath = Join-Path $toolRoot $assetName
+          $assetUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe"
+          New-Item -ItemType Directory -Path $toolRoot -Force | Out-Null
+          Invoke-WebRequest -Uri $assetUrl -OutFile $assetPath
+          if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+            throw "Pinned Inno Setup 7.1.0 installer was not downloaded"
+          }
+          gh release verify-asset is-7_1_0 $assetPath --repo jrsoftware/issrc
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup GitHub release attestation verification failed"
+          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $assetPath
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Pyrsys B\.V\.") {
+            throw "Inno Setup Authenticode signature is invalid or has an unexpected publisher"
+          }
+          $compilerRoot = Join-Path $toolRoot "compiler"
+          $installProcess = Start-Process -FilePath $assetPath -ArgumentList @(
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER",
+            ('/DIR="{0}"' -f $compilerRoot)
+          ) -Wait -PassThru -WindowStyle Hidden
+          if ($installProcess.ExitCode -ne 0) {
+            throw "Verified Inno Setup installer failed with exit code $($installProcess.ExitCode)"
+          }
+          $iscc = Join-Path $compilerRoot "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
+            throw "The Inno Setup compiler was not installed into RUNNER_TEMP"
+          }
+          $compilerVersion = (& $iscc --version 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $compilerVersion -notmatch '(?<![0-9])7\.1\.0(?![0-9])') {
+            throw "Expected Inno Setup 7.1.0 x64 compiler; got: $compilerVersion"
+          }
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, ("iscc_path={0}{1}" -f $iscc, [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+
       - name: Check tracked public tree
         shell: pwsh
         run: |
@@ -130,6 +171,122 @@ jobs:
             throw "Packaged executable smoke test state.json is not marked demo=true"
           }
 
+      - name: Build Windows Setup installer
+        shell: pwsh
+        run: |
+          .\Build-Installer.ps1 -SkipAppBuild -IsccPath "${{ steps.inno.outputs.iscc_path }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Setup install and reinstall smoke test
+        shell: pwsh
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP ("kv-agent-desk-setup-smoke-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          $syntheticProfile = Join-Path $smokeRoot "synthetic-user"
+          $state = Join-Path $syntheticProfile ".kv-agent-desk"
+          $installDir = Join-Path (Join-Path $smokeRoot "programs") "My Agent Desk"
+          $setup = Join-Path $env:GITHUB_WORKSPACE "dist\KV-Agent-Desk-Setup.exe"
+          New-Item -ItemType Directory -Path $state -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $state "ui-profiles") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Split-Path -Parent $installDir) -Force | Out-Null
+          $syntheticFiles = @(
+            (Join-Path $state "settings.json"),
+            (Join-Path $state "subscriptions.json"),
+            (Join-Path $state "history.json"),
+            (Join-Path (Join-Path $state "ui-profiles") "synthetic-style.json")
+          )
+          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"synthetic-settings":true}')
+          [System.IO.File]::WriteAllText($syntheticFiles[1], '{"synthetic-subscription":true}')
+          [System.IO.File]::WriteAllText($syntheticFiles[2], '{"synthetic-history":true}')
+          [System.IO.File]::WriteAllText($syntheticFiles[3], '{"synthetic-style":true}')
+          $expectedHashes = @{}
+          foreach ($file in $syntheticFiles) {
+            $expectedHashes[$file] = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+          }
+          $savedUserProfile = $env:USERPROFILE
+          try {
+            $env:USERPROFILE = $syntheticProfile
+            foreach ($attempt in 1..2) {
+              $arguments = @(
+                "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
+                ('/DIR="{0}"' -f $installDir),
+                "/TASKS="
+              )
+              $process = Start-Process -FilePath $setup -ArgumentList $arguments -WorkingDirectory $env:GITHUB_WORKSPACE -WindowStyle Hidden -PassThru
+              if (-not $process.WaitForExit(120000)) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                throw "Setup install/reinstall smoke test exceeded 120 seconds"
+              }
+              $process.Refresh()
+              if ($process.ExitCode -ne 0) {
+                throw "Setup install/reinstall smoke test attempt $attempt exited with code $($process.ExitCode)"
+              }
+              $process.Dispose()
+
+              if (-not (Test-Path -LiteralPath (Join-Path $installDir "KV-Agent-Desk.exe") -PathType Leaf)) {
+                throw "Setup did not install KV-Agent-Desk.exe in the isolated RUNNER_TEMP directory"
+              }
+              foreach ($file in $syntheticFiles) {
+                if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expectedHashes[$file]) {
+                  throw "Setup changed a synthetic user-data file: $([System.IO.Path]::GetFileName($file))"
+                }
+              }
+              $ini = Join-Path $state "installation.ini"
+              if (-not (Test-Path -LiteralPath $ini -PathType Leaf)) {
+                throw "Setup did not write the synthetic installation.ini record"
+              }
+              $iniBytes = [System.IO.File]::ReadAllBytes($ini)
+              if ($iniBytes.Length -lt 2 -or $iniBytes[0] -ne 0xFF -or $iniBytes[1] -ne 0xFE) {
+                throw "Setup installation.ini is not UTF-16 with a BOM"
+              }
+              $iniText = [System.IO.File]::ReadAllText($ini, [System.Text.Encoding]::Unicode)
+              if ($iniText -notmatch '\[Installation\]' -or
+                  $iniText -notmatch [regex]::Escape($installDir) -or
+                  $iniText -notmatch 'DesktopShortcut=0' -or
+                  $iniText -notmatch 'InstallerManaged=1') {
+                throw "Setup metadata does not identify the isolated install directory"
+              }
+              $mirror = Get-ItemProperty -LiteralPath "HKCU:\Software\KV-Agent-Desk"
+              if ($mirror.InstallDir -ne $installDir -or $mirror.DesktopShortcut -ne 0 -or $mirror.InstallerManaged -ne 1) {
+                throw "Setup did not mirror the isolated installation preferences in HKCU"
+              }
+              $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{8D8918EF-160F-4D1E-AE68-E168DB0AD2B9}_is1"
+              $uninstallEntry = Get-ItemProperty -LiteralPath $uninstallKey
+              if ($uninstallEntry.InstallLocation -ne $installDir) {
+                throw "Windows uninstall registration does not match the isolated install directory"
+              }
+            }
+
+            $uninstaller = Join-Path $installDir "unins000.exe"
+            $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
+              "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"
+            ) -WorkingDirectory $installDir -WindowStyle Hidden -Wait -PassThru
+            if ($uninstallProcess.ExitCode -ne 0) {
+              throw "Isolated Setup uninstall exited with code $($uninstallProcess.ExitCode)"
+            }
+            if (Test-Path -LiteralPath $installDir) {
+              throw "Setup uninstall left program files in the isolated installation directory"
+            }
+            if (-not (Test-Path -LiteralPath $state -PathType Container)) {
+              throw "Setup uninstall removed the synthetic user-data directory"
+            }
+            foreach ($file in $syntheticFiles) {
+              if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $expectedHashes[$file]) {
+                throw "Setup uninstall changed a synthetic user-data file"
+              }
+            }
+            if (Test-Path -LiteralPath (Join-Path $state "installation.ini")) {
+              throw "Setup uninstall did not clear its owned installation.ini record"
+            }
+            if (Test-Path -LiteralPath "HKCU:\Software\KV-Agent-Desk") {
+              throw "Setup uninstall did not clear its mirrored HKCU installation record"
+            }
+            if (Test-Path -LiteralPath $uninstallKey) {
+              throw "Setup uninstall left its Windows Apps uninstall entry"
+            }
+          } finally {
+            $env:USERPROFILE = $savedUserProfile
+          }
+
       - name: Package portable ZIP
         shell: pwsh
         run: |
@@ -139,7 +296,7 @@ jobs:
       - name: Generate SHA-256 checksums
         shell: pwsh
         run: |
-          foreach ($file in @("dist/KV-Agent-Desk.exe", "dist/KV-Agent-Desk-windows-x64.zip")) {
+          foreach ($file in @("dist/KV-Agent-Desk.exe", "dist/KV-Agent-Desk-Setup.exe", "dist/KV-Agent-Desk-windows-x64.zip")) {
             $name = [System.IO.Path]::GetFileName($file)
             $checksum = Join-Path (Split-Path -Parent $file) "${name}.sha256"
             $hash = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -158,13 +315,15 @@ jobs:
             throw 'Release tag and update manifest version differ'
           }
 
-      - name: Upload executable, portable ZIP, and checksums
+      - name: Upload executable, Setup installer, portable ZIP, and checksums
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: KV-Agent-Desk-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             dist/KV-Agent-Desk.exe
             dist/KV-Agent-Desk.exe.sha256
+            dist/KV-Agent-Desk-Setup.exe
+            dist/KV-Agent-Desk-Setup.exe.sha256
             dist/KV-Agent-Desk.update.json
             dist/KV-Agent-Desk-windows-x64.zip
             dist/KV-Agent-Desk-windows-x64.zip.sha256
@@ -187,7 +346,7 @@ jobs:
 
       - name: Verify SHA-256 checksum
         working-directory: release-assets
-        run: sha256sum --check KV-Agent-Desk.exe.sha256 KV-Agent-Desk-windows-x64.zip.sha256
+        run: sha256sum --check KV-Agent-Desk.exe.sha256 KV-Agent-Desk-Setup.exe.sha256 KV-Agent-Desk-windows-x64.zip.sha256
 
       - name: Publish GitHub release
         env:
@@ -197,8 +356,10 @@ jobs:
         run: |
           gh release create "$GH_TAG" \
             release-assets/KV-Agent-Desk.exe \
+            release-assets/KV-Agent-Desk-Setup.exe \
             release-assets/KV-Agent-Desk-windows-x64.zip \
             release-assets/KV-Agent-Desk.exe.sha256 \
+            release-assets/KV-Agent-Desk-Setup.exe.sha256 \
             release-assets/KV-Agent-Desk.update.json \
             release-assets/KV-Agent-Desk-windows-x64.zip.sha256 \
             --repo "$GH_REPO" \

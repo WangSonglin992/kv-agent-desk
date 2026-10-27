@@ -14,18 +14,32 @@ import tempfile
 import time
 import urllib.request
 
+from .install_location import (
+    install_dir_for_runtime,
+    register_legacy_installation,
+    sync_owned_uninstall_display_version,
+)
 from .paths import local_app_data, user_state_directory
 
 
-_PRODUCT_DIR = Path("Programs") / "KV-Agent-Desk"
 _EXECUTABLE_NAME = "KV-Agent-Desk.exe"
 _SHORTCUT_NAME = "KV Agent Desk.lnk"
 _SHORTCUT_TARGET_ENV = "KV_AGENT_DESK_TARGET"
 _SHORTCUT_STATE_ENV = "KV_AGENT_DESK_STATE"
+_SHORTCUT_OWNED_TARGETS_ENV = "KV_AGENT_DESK_OWNED_TARGETS"
 _SERVER_URL = "http://127.0.0.1:8765"
 _SERVER_STOP_TIMEOUT_SECONDS = 15.0
 _REPLACE_TIMEOUT_SECONDS = 30.0
 _REPLACE_RETRY_SECONDS = 0.2
+_BACKUP_FILE_LIMITS = {
+    "settings.json": 1024 * 1024,
+    "subscriptions.json": 1024 * 1024,
+    "last-good.json": 16 * 1024 * 1024,
+    "accounts-last-good.json": 4 * 1024 * 1024,
+    "last-frame.png": 32 * 1024 * 1024,
+    "last-frame-meta.json": 256 * 1024,
+    "updates.json": 1024 * 1024,
+}
 _SHORTCUT_SCRIPT = r'''
 $ErrorActionPreference = 'Stop'
 $utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -60,8 +74,21 @@ def _is_windows() -> bool:
 
 
 def installed_executable() -> Path:
-    """Return the fixed per-user installation target."""
-    return local_app_data() / _PRODUCT_DIR / _EXECUTABLE_NAME
+    """Return the registered program path or its first-install default."""
+    return installation_directory() / _EXECUTABLE_NAME
+
+
+def installation_directory() -> Path:
+    return install_dir_for_runtime()
+
+
+def _sync_display_version_for_canonical_install(target: Path, state_dir: Path) -> None:
+    try:
+        is_canonical_data = Path(state_dir).resolve() == user_state_directory().resolve()
+    except OSError:
+        is_canonical_data = False
+    if is_canonical_data:
+        sync_owned_uninstall_display_version(target.parent, _package_version())
 
 
 def is_installed(exe: Path) -> bool:
@@ -108,6 +135,55 @@ def ensure_desktop_shortcut(exe: Path) -> Path:
     return link_path
 
 
+def remove_owned_desktop_shortcut(targets: list[Path]) -> bool:
+    """Remove this product's shortcut only when it points to a known app EXE."""
+    if not _is_windows():
+        raise NotImplementedError("KV Agent Desk desktop shortcuts are Windows-only")
+    resolved: list[str] = []
+    for value in targets:
+        path = Path(value)
+        if not path.is_absolute() or path.suffix.lower() != ".exe":
+            raise ValueError("shortcut removal target must be an absolute .exe path")
+        normalized = str(path.resolve())
+        if normalized not in resolved:
+            resolved.append(normalized)
+    system_root = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+    powershell = system_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    script = r'''
+$ErrorActionPreference = 'Stop'
+$desktop = [Environment]::GetFolderPath('Desktop')
+if ([string]::IsNullOrWhiteSpace($desktop)) { exit 3 }
+$linkPath = Join-Path $desktop 'KV Agent Desk.lnk'
+if (!(Test-Path -LiteralPath $linkPath -PathType Leaf)) { exit 0 }
+$link = (New-Object -ComObject WScript.Shell).CreateShortcut($linkPath)
+$expected = @($env:KV_AGENT_DESK_OWNED_TARGETS -split [Environment]::NewLine)
+$actual = [IO.Path]::GetFullPath($link.TargetPath)
+foreach ($candidate in $expected) {
+    if (![string]::IsNullOrWhiteSpace($candidate) -and
+        [string]::Equals($actual, [IO.Path]::GetFullPath($candidate), [StringComparison]::OrdinalIgnoreCase)) {
+        Remove-Item -LiteralPath $linkPath -Force
+        exit 0
+    }
+}
+exit 0
+'''
+    result = subprocess.run(
+        [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        check=False,
+        env={"SystemRoot": str(system_root), _SHORTCUT_OWNED_TARGETS_ENV: os.linesep.join(resolved)},
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        raise OSError("Could not remove the owned KV Agent Desk desktop shortcut")
+    return True
+
+
+def legacy_installation_executable() -> Path:
+    """Return the previous per-user EXE path for stale-shortcut cleanup."""
+    return local_app_data() / "Programs" / "KV-Agent-Desk" / _EXECUTABLE_NAME
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -136,10 +212,15 @@ def _backup_user_data(state_dir: Path) -> Path:
     backup_root.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     destination = Path(tempfile.mkdtemp(prefix=f"install-{stamp}-", dir=backup_root))
-    for filename in ("settings.json", "subscriptions.json"):
+    for filename, max_bytes in _BACKUP_FILE_LIMITS.items():
         source = state_dir / filename
         if source.is_file() and not source.is_symlink():
-            (destination / filename).write_bytes(source.read_bytes())
+            if source.stat().st_size > max_bytes:
+                raise OSError("Saved data backup exceeded a size limit")
+            with source.open("rb") as original, (destination / filename).open("xb") as backup:
+                shutil.copyfileobj(original, backup, length=256 * 1024)
+                backup.flush()
+                os.fsync(backup.fileno())
     profiles = state_dir / "ui-profiles"
     if profiles.is_dir() and not profiles.is_symlink():
         destination_profiles = destination / "ui-profiles"
@@ -242,8 +323,10 @@ def _handoff_existing_server() -> bool:
     return True
 
 
-def _launch(executable: Path, background: bool) -> None:
+def _launch(executable: Path, background: bool, *, state_dir: Path | None = None) -> None:
     command = [str(executable)]
+    data_directory = user_state_directory() if state_dir is None else Path(state_dir)
+    command.extend(("--state-dir", str(data_directory.resolve())))
     if background:
         command.append("--background")
     subprocess.Popen(
@@ -272,14 +355,18 @@ def install_current(source: Path, *, state_dir: Path, background: bool = False) 
     if target.is_symlink():
         raise ValueError("installed executable must not be a symlink")
     if _same_file_or_hash(source, target):
-        ensure_desktop_shortcut(target)
+        state_dir = Path(state_dir)
+        record = register_legacy_installation(target.parent, state_dir=state_dir)
+        _sync_display_version_for_canonical_install(target, state_dir)
+        if record.desktop_shortcut:
+            ensure_desktop_shortcut(target)
         if _server_is_current_installed_version(_read_server_state()):
             if background or _request_existing_server(show=True):
                 return target
             if _server_is_current_installed_version(_read_server_state()):
                 return target
         _handoff_existing_server()
-        _launch(target, background=background)
+        _launch(target, background=background, state_dir=state_dir)
         return target
 
     state_dir = Path(state_dir)
@@ -296,7 +383,7 @@ def install_current(source: Path, *, state_dir: Path, background: bool = False) 
     except Exception:
         if old_target_exists and server_stopped and target.is_file():
             try:
-                _launch(target, background=True)
+                _launch(target, background=True, state_dir=state_dir)
             except OSError:
                 pass
         raise
@@ -309,6 +396,15 @@ def install_current(source: Path, *, state_dir: Path, background: bool = False) 
 
     if not server_stopped:
         _handoff_existing_server()
-    ensure_desktop_shortcut(target)
-    _launch(target, background=background)
+    record = register_legacy_installation(target.parent, state_dir=state_dir)
+    _sync_display_version_for_canonical_install(target, state_dir)
+    if record.desktop_shortcut:
+        ensure_desktop_shortcut(target)
+    _launch(target, background=background, state_dir=state_dir)
     return target
+
+
+def _package_version() -> str:
+    from . import __version__
+
+    return __version__
