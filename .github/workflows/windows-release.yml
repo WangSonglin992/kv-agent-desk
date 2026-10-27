@@ -305,6 +305,27 @@ jobs:
               }
             }
 
+            $userOwnedSentinel = Join-Path $installDir "synthetic-user-owned.txt"
+            [System.IO.File]::WriteAllText($userOwnedSentinel, '{"synthetic-user-owned":true}')
+            $userOwnedSentinelHash = (Get-FileHash -LiteralPath $userOwnedSentinel -Algorithm SHA256).Hash
+            $ownedInstallFiles = @(
+              (Join-Path $installDir "KV-Agent-Desk.exe"),
+              (Join-Path $installDir "LICENSE"),
+              (Join-Path $installDir "THIRD_PARTY_NOTICES.md"),
+              (Join-Path $installDir "unins000.exe")
+            )
+            $ownedLicenseFiles = @(Get-ChildItem -LiteralPath (Join-Path $installDir "licenses") -File -Recurse |
+              ForEach-Object { $_.FullName })
+            if ($ownedLicenseFiles.Count -eq 0) {
+              throw "Setup did not install the synthetic smoke test's expected license files"
+            }
+            $ownedInstallFiles += $ownedLicenseFiles
+            foreach ($ownedFile in $ownedInstallFiles) {
+              if (-not (Test-Path -LiteralPath $ownedFile -PathType Leaf)) {
+                throw "Setup did not install an expected tracked program or license file"
+              }
+            }
+
             $uninstaller = Join-Path $installDir "unins000.exe"
             $uninstallerLog = Join-Path $smokeRoot "uninstaller.log"
             $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @(
@@ -372,8 +393,20 @@ jobs:
               }
               throw "Isolated Setup uninstall exited with code $uninstallExitCode"
             }
-            if (Test-Path -LiteralPath $installDir) {
-              throw "Setup uninstall left program files in the isolated installation directory"
+            $cleanupDeadline = [DateTime]::UtcNow.AddSeconds(20)
+            do {
+              $remainingOwnedFiles = @($ownedInstallFiles | Where-Object {
+                Test-Path -LiteralPath $_ -PathType Leaf
+              })
+              if ($remainingOwnedFiles.Count -eq 0) { break }
+              Start-Sleep -Milliseconds 250
+            } while ([DateTime]::UtcNow -lt $cleanupDeadline)
+            if ($remainingOwnedFiles.Count -ne 0) {
+              throw "Setup uninstall left tracked executable, uninstaller, or license files in the isolated installation directory"
+            }
+            if (-not (Test-Path -LiteralPath $userOwnedSentinel -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $userOwnedSentinel -Algorithm SHA256).Hash -ne $userOwnedSentinelHash) {
+              throw "Setup uninstall removed or changed the untracked synthetic app-directory sentinel"
             }
             if (-not (Test-Path -LiteralPath $state -PathType Container)) {
               throw "Setup uninstall removed the synthetic user-data directory"
