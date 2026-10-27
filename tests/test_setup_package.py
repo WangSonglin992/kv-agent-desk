@@ -75,6 +75,17 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertNotIn("DelTree(", self.definition)
         self.assertNotIn("RemoveDir(", self.definition)
 
+    def test_inno_tracks_shortcuts_and_uninstall_does_not_recurse_into_user_state(self):
+        icons = self.definition.split("[Icons]", 1)[1].split("[Code]", 1)[0]
+        self.assertIn('Name: "{group}\\KV Agent Desk"', icons)
+        self.assertIn('Name: "{userdesktop}\\KV Agent Desk"', icons)
+        self.assertIn("Tasks: desktopicon", icons)
+        self.assertNotIn("uninsneveruninstall", self.definition.casefold())
+        self.assertNotIn("[UninstallDelete]", self.definition)
+        self.assertNotIn("DelTree(", self.definition)
+        self.assertNotIn("RemoveDir(", self.definition)
+        self.assertNotIn("DeleteFile(", self.definition)
+
     def test_setup_payload_sources_are_explicit_and_exclude_private_state(self):
         self.assertIn("{#SetupPayload}\\KV-Agent-Desk.exe", self.definition)
         self.assertIn("{#SetupPayload}\\LICENSE", self.definition)

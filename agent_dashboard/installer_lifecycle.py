@@ -228,12 +228,9 @@ def _validate_owned_installed_executable() -> tuple[Path, install_location.Insta
 
 def _uninstall_installer() -> None:
     _require_frozen_windows()
-    executable, record = _validate_owned_installed_executable()
+    _, record = _validate_owned_installed_executable()
     installation._handoff_existing_server()
     set_autostart(False, [])
-    installation.remove_owned_desktop_shortcut(
-        _owned_shortcut_targets(executable, record)
-    )
     if not install_location.clear_installer_installation(record.directory):
         raise ValueError("owned Setup installation registration could not be cleared")
 

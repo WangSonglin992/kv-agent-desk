@@ -245,7 +245,7 @@ class InstallerLifecycleTests(unittest.TestCase):
 
     def test_uninstall_clears_only_owned_registration_and_keeps_user_files(self):
         install_dir = self.root / "owned install"
-        executable = self.executable(install_dir)
+        self.executable(install_dir)
         install_location.register_installer_installation(
             install_dir, desktop_shortcut=False, state_dir=self.state_dir
         )
@@ -264,13 +264,18 @@ class InstallerLifecycleTests(unittest.TestCase):
         retained.write_bytes(b"synthetic retained history")
 
         with patch.object(installation, "_handoff_existing_server") as handoff, \
-                patch.object(installation, "remove_owned_desktop_shortcut") as remove:
+                patch.object(installation, "remove_owned_desktop_shortcut") as remove, \
+                patch.object(installation.subprocess, "run",
+                             side_effect=AssertionError("uninstall must not launch a process")), \
+                patch.object(installation.subprocess, "Popen",
+                             side_effect=AssertionError("uninstall must not launch a process")):
             lifecycle._uninstall_installer()
 
         handoff.assert_called_once_with()
-        self.assertEqual(remove.call_args.args[0], [executable.resolve(), (self.root / "legacy" / "KV-Agent-Desk.exe").resolve()])
+        remove.assert_not_called()
         self.assertNotIn("KVAgentDesk", self.registry.values[run_key])
         self.assertFalse(install_location.installation_ini_path(self.state_dir).exists())
+        self.assertNotIn(install_location.REGISTRY_SUBKEY, self.registry.values)
         self.assertEqual(settings_file.read_bytes(), settings_bytes)
         self.assertEqual(retained.read_bytes(), b"synthetic retained history")
         self.assertTrue(install_dir.is_dir())
