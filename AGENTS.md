@@ -16,3 +16,8 @@ explicitly requested local migration/retention check, operate only on its
 allowlisted files; verify using counts, schema, metadata or hashes and keep file
 contents out of output. User state may be copied only between approved local
 state locations by the requested migration; never put it in the source repo.
+
+For app startup and updates, use the Setup-registered installation
+directory. Never point desktop shortcuts or Windows Run at a workspace
+or `dist` debug executable. For preview, use `--demo --browser-only`
+with `--port 8767`.

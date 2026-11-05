@@ -1,106 +1,81 @@
 # KV Agent Desk 工作区交接
 
-这份文档是新工作区的入口。当前实现以公开仓库 `WangSonglin992/kv-agent-desk` 为准；历史聊天只作为背景，不代替源码、测试和发布记录。本交接按 2026-10-27 可见的代码整理。
+新工作区请先读本文件和 [WORKSPACE-MIGRATION.md](WORKSPACE-MIGRATION.md)。此文只记录当前产品结构、可信验收状态与未完成项；历史失败 run 的完整裁定留在当前开发机的 ignored 本地 ledger，不纳入公开源码历史。
 
-## 目前状态
+## 当前状态
 
-- 安装器工作线更新至 `v0.7.2`。`v0.7.0` (commit `8680f74`) 和 `v0.7.1` (commit `464417b`) 均已提交/tag，但都没有 GitHub Release；两个tag均保留，不移动或重写历史。
-- CI run `40462507734` 的 TEMP fixture false positives 已处理。后续 CI run `40463890833` 在 293 项中有 1 FAIL 与 1 SKIP：快捷方式目标去重测试期待规范路径，但Windows返回了规范路径对应的原始短路径别名。源码路径读取已改为返回规范化路径并更新测试；还需通过下一次完整 main/workflow_dispatch 验证。
-- 0.6.2 修复了 Codex 打包环境与 Windows Explorer 访问不同 AppData 目录的问题，首次运行会将旧数据迁移到用户主目录下的 `.kv-agent-desk` 并保留备份。
-- 用户现在要求把应用改为常规 Windows 安装器：默认安装到 `D:\APP\KV-Agent-Desk`，首次安装默认创建桌面快捷方式并启用自启动，复装更新使用注册的安装位置，同时保留应用外的本地历史、套餐资料和自定义样式。
-- 安装器源码已经提交，但最新tag `v0.7.1` 的 CI 仍有上述 1 项测试失败，未生成 Release/Setup。当前目标版本是 `v0.7.2`。D 盘安装、复装路径保留及卸载数据保护尚未验收；不要将源码 commit/tag 描述为可下载的正式安装器。主代理计划先将 `main` 上完整 CI 跑通，再打 tag；完成后在本节写入 commit、CI、release、Setup资产、登记路径和现场验收结果。
-- 用户计划转到新工作区继续维护；后续功能修改在新工作区构建公开 release，安装程序负责更新目标安装目录。实际安装登记位置应从应用自己的 HKCU 登记读取，不能靠旧工作区或源码目录推断。
-- 安装身份的正本为 `%USERPROFILE%\.kv-agent-desk\installation.ini`（UTF-16 BOM，`[Installation]` 节）。`InstallDir` 保存经校验的绝对程序目录；`DesktopShortcut` 与 `InstallerManaged` 保存 0/1 选项。HKCU `Software\KV-Agent-Desk` 是镜像/回退，因此更换开发工作区或打包宿主后安装身份仍保持一致。卸载可移除此登记文件和应用拥有的注册表镜像；必须保留同目录中的其他用户数据。
+- 截至 2026-11-05，正式版本为 [v0.8.0](https://github.com/WangSonglin992/kv-agent-desk/releases/tag/v0.8.0)，功能源码基线为 `912a5cd548bde1a0c9b3dc71c97e84b58bb59520`。本机已用官方 SHA-256 校验包更新到 `D:\APP\KV-Agent-Desk`。
+- 手动 CI `41974753132` 和正式发布 CI `41975148889` 均通过；手动 CI 运行 314 项测试、跳过 1 项，并验证三张动画图集确实嵌入 EXE、源/打包程序 smoke、四阶段安装选项记忆、卸载与数据保留。
+- 本机验收确认程序版本与官方 EXE 哈希一致、配置指纹未变、全部自定义样式和当前选择保留、历史缓存仍在、启动恢复上次画面、USB 已连接。桌面快捷方式和 Run 登记均指向安装目录与同一用户数据目录。没有执行实际 Windows 重启，也没有公开用户资料或画面。
+- 安装器在 v0.7.5 已修复 PowerShell 快捷方式收尾超时、Inno 吞掉完成阶段错误和短/长路径别名比较问题。使用原生 Inno 处理受信任快捷方式，失败退出码为 73；旧失败 tag 不重写，v0.7.4 没有 Release。
 
-## 产品范围和运行边界
+## 产品与运行边界
 
-KV Agent Desk 是 Windows 本地运行的 KV / Trofeo Vision 9.16 USB LCD Agent 面板。控制页绑定 loopback；画面由同一渲染器输出到本机预览和屏幕。默认打包应用需要 Windows 10/11 x64、Python 3.12 x64 构建环境、当前用户的 WinUSB 设备接口和 WebView2 Evergreen Runtime。运行发布版不要求安装 Python；需使用 Python 的是本地源码构建流程。
+KV Agent Desk 是 Windows 本地 Agent 状态屏和控制页，支持 Codex、ZCode、Antigravity、两个 DeepSeek 余额槽位、套餐资料和三套 UI。控制页仅监听 loopback。未知或过期来源沿用未知/最近可信状态，不从标题或消息正文猜任务进度。运行数据和配置位于源码仓库外。
 
-屏幕接口 VID:PID 为 `0416:5408`。逻辑画布为 1920 × 480，9.16 常见传输高度为 462；硬件复用相同 USB ID 的其他屏幕不一定兼容。旋转、画面亮度和 USB 输出设置保存在本地；亮度通过像素调光，屏幕显示与 Thermalright TRCC 对同一 USB 接口互斥。
+KV/Trofeo Vision 9.16 使用 WinUSB VID:PID `0416:5408`。逻辑画布 1920×480，常见传输高度 462；方向、软件亮度和 USB 输出单独管理。USB 接口由本程序独占，不能同时交给 TRCC。
 
-任务面板显示摘要，不显示任务标题或计划步骤。任务数、Token、额度无法可靠读取时遵循来源未知/最后可信值策略，不用未知额度冒充实际用量。Antigravity 的累计用量跨会话窗口，不能当作每日 Token；Gemini 5 小时/周额度共享，旧逐模型 Claude/GPT 额度不应硬套。套餐名称、规格、到期日期是与自动数据分开的手动资料。
+## 已接受的 Agent 面板与视觉规则
 
-## 来源适配器和刷新边界
+- 主画面固定为 Codex、ZCode、Antigravity 三张 Agent 卡；任务只显示数量，不显示标题或计划/计划进度。无可靠任务数或 Token 且没有可信历史时按用户要求显示 `0`；额度未知仍保持未知。
+- 任务数超过 3 个时标红为忙碌。v0.8.0 状态指示器使用 AI 娘：Codex 白发龙娘、ZCode 黑发持书形象、Antigravity 蓝紫猫耳形象。空闲、工作、忙碌分别使用不同帧组；空闲周期 4 秒并按默认 1Hz 推进，工作周期 2 秒、忙碌周期 0.65 秒，沿用快速刷新。unknown/offline 不播放假工作动画，素材不可用时回退原指示器。官方 logo 和状态小字保留。
+- Antigravity 展示 Gemini 共享的 5 小时和周额度；Claude/GPT 独立额度组在此面板忽略。无数据或陈旧数据时保留最后可信值/画面并给低调检查提示。
+- DeepSeek 只显示右侧上下两张紧凑余额卡。无法可靠验证可用额度的 LiteLLM / 课题组 GLM 槽位不接入。ChatGPT 套餐规格/到期日保存在独立手填资料中；用户的月付套餐按月检查并手动更新，程序不会自动延长 `expires_at`。这与实时 5 小时/周额度读取无关。
+- ChatGPT 确实没有 5 小时限额时，由控制页的 `codex_no_five_hour_limit` 个人设置将该窗口固定显示为 100%；不要用 API 余额推算它。OpenAI API 剩余额度源尚未接入：只读测试能认证 API Key，但费用统计与旧余额接口没有提供可用余额，因此没有添加“三个账户选两个”的配置，也不能用 Costs 费用冒充余额。不要读取网页登录会话凭据来绕过这一限制。
+- 三内置主题为 `classic`、`aurora`、`paper`，内置主题编辑保存为自定义副本。所有注册视觉元素可调位置（XY/方向键）、字号、本机字体、颜色、粗体、斜体；Ctrl 多选支持同时移动、对齐和分布。JSON 导入/导出只改外观，不改可见文字、任务内容、额度/余额或数据绑定。
+- 启动先恢复上次屏幕画面，再逐来源采集。屏幕默认旋转 180°；亮度是软件调光。Thermalright TRCC 与应用不能同时占有 USB 接口。
 
-| 适配器 | 读取来源 | 数据和注意点 |
-| --- | --- | --- |
-| Codex | 当前用户本机 Codex session JSONL | 按事件时间、会话及日界线汇总进行中父级任务、当日 Token 和本地已有的额度窗口；JSONL 增量读取并有限回看。读取错误时由保留层留住可信旧值。不会调用模型 API，也不读取认证凭据。 |
-| ZCode | 本机 SQLite 会话库 | 只读打开，通过 session、turn/tool 生命周期和 session_input 汇总近期活跃任务及请求级 Token。数据库以最近 36 小时为观察范围，并限制扫描到最多 128 个近期会话；截断意味着不能把部分计数冒充精确总数。额度仅针对用户已选择的官方 Coding Plan，来源为允许清单中的官方 HTTPS API。 |
-| Antigravity | 已运行的本机 language server RPC | 约每 2 秒查询排除子轨迹的父级活动摘要；约每 15 秒后台读取 `includeMessages=false` 的 Generator Metadata，只保留数值用量；约每 60 秒独立更新 Gemini shared quota 摘要。CSRF 和本地端口信息只短暂留在内存，请求不读消息正文。没有可靠来源时保留未知或最后可信结果。 |
-| DeepSeek 账户 | `DeepSeek_public` / `DeepSeek_personal` 环境变量及 DeepSeek 官方余额接口 | 两个本机余额槽位独立刷新，至少 60 秒间隔、HTTPS GET；不请求模型推理。变量名是公开接口约定，实际值只能留在用户自己的 Windows 环境里。 |
+## 架构地图
 
-适配器实现位于 `agent_dashboard/adapters/`，DeepSeek collector 位于 `agent_dashboard/accounts/`。当前字段契约在 `docs/EXTENDING.md`，状态的过期和合并由 `retention.py` 处理。新增来源应只用可复现生命周期/计数，未知值就保留未知；测试应 mock 文件、数据库和网络接口，不能触发真实账户请求。
-
-## LCD 样式和编辑器
-
-三套内置样式为 `classic`、`aurora` 和 `paper`。用户选择内置样式开始编辑时创建自定义副本。画布样式以版本 1 JSON profile 存储，顶层限定为布局、颜色、画布几何和可选 `elements`；当前画布 1920 × 480。模板允许移动元素和设置字体外观，但不能改文字内容、业务数据、绑定或资源路径。最多保存 32 个自定义 profile，单文件最大 64 KiB。
-
-渲染图元的固定语义 ID 位于 `ui_elements.py`；选择框、父子卡片移动、对齐、分布、撤销和草稿在 `layout_editor.py` / `ui_scene.py`。字体 ID 是本机不透明标识，不随模板携带字体文件。修改模板 schema 时必须保持现有 JSON 导入/导出兼容性，并更新 `tests/test_ui_profiles.py`、`tests/test_editor_render.py` 及 `docs/UI-TEMPLATES.md`。
-
-完整界面字段、JSON schema 和多选操作说明见 [UI-TEMPLATES.md](UI-TEMPLATES.md)。套餐资料保存在独立板块，不能在模板里伪造 Agent 状态或更改显示内容。
-
-## 本地数据、迁移与隐私
-
-Windows 发布版规范数据位置是 `%USERPROFILE%\.kv-agent-desk`，与安装程序位置分离。普通用户 AppData 在打包宿主中可能被重定向；0.6.2 已将状态路径移出该重定向范围，并固定让桌面和 Run 启动参数携带同一数据目录。
-
-首次迁移读取固定白名单：设置、订阅资料、Agent 最后可信快照、余额快照、最后画面、画面元数据、更新元数据和合法 UI profile。迁移会先逐源备份，再原子且不覆盖地写入目标；旧源仍留在原位置。目标有成功 marker 后不重复迁移。profile/配置/缓存和迁移备份只在当前 Windows 用户本机，不进入 Git、Setup 文件、ZIP、日志、issue 或交接文档。不要查看或粘贴真实密钥、套餐资料、账户余额、任务文字或本地历史 JSON。
-
-`docs/PRIVACY.md` 是网络请求与保留文件的公开说明。安装器卸载只能移除程序文件和应用拥有的快捷方式/自启动登记；必须保留用户历史和样式目录，不执行“清理本地数据”。
-
-## 安装器工作线
-
-本次安装器需求和阶段边界：
-
-- 安装向导目标：默认 `D:\APP\KV-Agent-Desk`，存在路径选择页并创建产品子目录。
-- 安装、更新、静默更新和卸载均以 Setup 登记的真实 `InstallDir` 为准，不能写死或恢复到旧 per-user 程序目录。
-- 首次安装中“创建桌面快捷方式”“开机自启动”默认勾选；复装时沿用已安装路径，并在 Wizard 中尊重用户取消任务的选择。
-- 编译器固定为 Inno Setup 7.1.0 x64（release tag `is-7_1_0`）；CI 必须先通过官方 release asset verification 与 Authenticode 签名校验再执行编译。
-- 用户数据目录在程序目录之外；复装只替换产品文件，卸载只移除程序和应用登记，两个操作都保留设置、手动套餐、历史缓存、自定义 profile 和备份。
-- 0.6.2 updater 下载经过 SHA-256 验证的 EXE。后续安装器发布必须保持此旧客户端更新协议兼容，或使用清晰、已验证的迁移/升级分支；未经验证不要改写线上 update manifest。
-- 0.7.0 workflow `40462507734` 报告 292 项中 48 条 Windows TEMP fixture 保护误报：8.3 短路径没有与解析后的长路径登记，且一个测试的 nested tempDir 未登记。0.7.1 已修复该fixture helper。CI run `40463890833` 新发现的归一化路径断言失败已修复生产helper并改测试；完整main CI复跑尚待执行。
-- Setup脚本/CI资产名、CLI与silent退出码、首次安装/复装/任务选项/卸载数据保留和D盘现场验收均未通过发布验收；本节仍是验收线，不是完成证明。
-
-建议检查路径：`agent_dashboard/installation.py`、`app.py` 的入口和 `startup_command`、`tools/create_update_manifest.py`、`.github/workflows/windows-release.yml`、`Build-Dashboard.ps1`、`Start-Dashboard.cmd` 以及安装器脚本。源码运行没有受信任的安装器权限，不允许通过本机控制页传入任意安装路径或命令。
-
-## 主要源码地图
-
-| 路径 | 作用 |
+| 路径 | 责任 |
 | --- | --- |
-| `agent_dashboard/app.py` | 生命周期、控制页服务器、状态合并、启动/停止和更新接入。 |
-| `agent_dashboard/adapters/` | Codex、ZCode、Antigravity 只读采集。 |
-| `agent_dashboard/accounts/` | DeepSeek 官方余额读取和限频。 |
-| `agent_dashboard/retention.py` | 最后可信数据与 stale 状态。 |
-| `agent_dashboard/ui_profiles.py`, `ui_elements.py`, `layout_editor.py`, `ui_scene.py` | 样式校验、固定图元、预览编辑及渲染 scene。 |
-| `agent_dashboard/render.py`, `display.py` | 画面和 WinUSB 传输。 |
-| `agent_dashboard/settings.py`, `subscriptions.py`, `paths.py`, `storage_migration.py` | 本地偏好、手动套餐、用户目录和白名单迁移。 |
-| `agent_dashboard/installation.py`, `updates.py` | 程序部署、Run/快捷方式与在线更新。 |
-| `tools/check_public_tree.py` | 只扫描 Git 暂存索引，白名单之外的文件不会发布。 |
-| `tools/create_update_manifest.py`, `tools/package_release.py` | 生成稳定更新清单与只含公开资产的 ZIP。 |
-| `.github/workflows/windows-release.yml` | 干净 Windows runner、测试和 release 打包。 |
+| `agent_dashboard/app.py` | 应用启动、loopback API、数据刷新/合并、Setup lifecycle CLI 路由。 |
+| `agent_dashboard/adapters/` | Codex JSONL、ZCode SQLite、Antigravity 本机 language server 读取。 |
+| `agent_dashboard/accounts/` | DeepSeek 官方只读余额查询。 |
+| `agent_dashboard/retention.py` | 最后可信值和 stale 标记。 |
+| `agent_dashboard/ui_profiles.py`、`ui_elements.py`、`layout_editor.py`、`ui_scene.py`、`ui_fonts.py` | 三套内置 UI、元素编辑器、JSON profile 和本机字体映射。 |
+| `agent_dashboard/render.py`、`display.py` | 固定 LCD 画布及 WinUSB 帧写入。 |
+| `agent_dashboard/mascots.py`、`assets/mascot_*.png` | 固定映射、离线透明图集、三态循环与无素材回退；规范见 `docs/MASCOT-ANIMATIONS.md`。 |
+| `agent_dashboard/paths.py`、`storage_migration.py` | canonical 用户数据目录和不覆盖式旧数据迁移。 |
+| `agent_dashboard/install_location.py` | UTF-16 BOM `installation.ini` 和 HKCU install identity 解析。 |
+| `agent_dashboard/installer_lifecycle.py` | Setup prepare/finish/uninstall 所属权检查和自有生命周期。 |
+| `agent_dashboard/installation.py`、`updates.py` | 已登记目录的 EXE 安装/更新与 SHA-256 检查。 |
+| `installer/KV-Agent-Desk.iss`、`Build-Installer.ps1`、`tools/stage_installer_payload.py` | Inno 向导、签名验证编译器和公开 Setup stage payload。 |
+| `tests/test_install_location.py`、`test_installer_lifecycle.py`、`install_test_safety.py` | 安装登记、lifecycle、Windows 测试 fixture 路径保护。 |
 
-## 已知发布和验证记录
+## 安装登记与持久化数据
 
-| 版本 | 公开摘要 |
-| --- | --- |
-| 0.3.0 | WebView2 托盘应用、Run 自启动、启动时先恢复画面。 |
-| 0.3.1–0.4.3 | Localhost 控制、安全刷新、DeepSeek/ZCode/Antigravity 适配与只读额度查询逐步稳定。具体历史见 `CHANGELOG.md`。 |
-| 0.4.4 | Antigravity 父级任务状态和累计 Token 来源。 |
-| 0.5.0 | 可视元素编辑、Ctrl 多选、对齐分布、本机字体和 JSON 样式副本。 |
-| 0.6.0 | per-user 安装骨架、自动更新清单、版本切换。 |
-| 0.6.1 | 自启动明确绑定数据路径、失败读取重试、不以内存默认设置覆盖磁盘配置。 |
-| 0.6.2 | 修复打包宿主 AppData 重定向，统一用户数据路径并迁移旧副本。 |
-| 0.7.0 | Windows 安装器源码已提交并打 tag；CI TEMP fixture 检查误报阻断单元测试，没有 release 或 Setup。保留 tag。 |
-| 0.7.1 | 修复TEMP路径fixture后，CI仍因shortcut目标规范化断言有1 FAIL、1 SKIP；没有release或Setup。保留tag。 |
-| 0.7.2 | 安装器的当前验收目标：完整CI、正式Setup release和D盘安装/复装/卸载保留验证尚待完成。 |
+- 安装路径由 `%USERPROFILE%\.kv-agent-desk\installation.ini` 的 `[Installation]` / `InstallDir` 决定；HKCU `Software\KV-Agent-Desk` 是镜像/回退。安装、workspace 和用户数据分离。
+- Setup 首装默认 `D:\APP\KV-Agent-Desk`，默认勾选桌面快捷方式和自启动。复装读取安装登记和上次安装任务选择；部署更新时尊重用户当前配置，不强制改成默认值。安装 AppId 固定为 `{8D8918EF-160F-4D1E-AE68-E168DB0AD2B9}`，不能随版本或工作区改变。
+- 用户数据自 v0.6.2 起放在用户主目录，原因是打包宿主与 Explorer 可能访问不同的 AppData 重定向目录；不要改回 `%LOCALAPPDATA%`。UI 的 `status_indicator` 仍保留原有语义 ID 和 position-only 的 shape 描述符，即使它承载位图，也不能随意更名或改变导入契约。
+- 卸载应仅删除本应用的程序文件、快捷方式及 Run/install 登记，保留 `.kv-agent-desk` 中的历史、配置和样式。快捷方式由 Inno `[Icons]` 原生清理，不应在卸载 hook 启动 PowerShell/COM。
+- 迁移/安装验证限定读取 allowlist，使用数量、schema、metadata 或 hash 对账，不向输出写真实账户资料。当前 PC 保留性已实测；不要在 Setup stage、repo、日志或公开 handoff 复制任何运行数据。
 
-0.6.2 开发验收基线为 256 项，本机包含1项因symlink权限跳过。0.7.0 CI run `40462507734` 有48条TEMP fixture误报；0.7.1 CI run `40463890833` 有1 FAIL、1 SKIP。不能把它们记作安装器验收通过；等待主代理完成完整CI/run测试。Windows实际USB显示、安装向导、升级/卸载需记录现场证据；模拟Run command不等同于重启整台电脑。
+## 构建、预览与发布
 
-## 新工作区续接
+本机预览使用合成数据和独立端口：
 
-1. 从最新公开 `main` clone 源码，不复制原 `.venv`；虚拟环境内的入口脚本记录绝对路径，移动目录后必须重建。
-2. 开始修改前读本文件、`WORKSPACE-MIGRATION.md`、README、CHANGELOG、PRIVACY 和安装器文档，然后确认 `git status`、最新版本 tag、安装器路径登记规则。
-3. 复制项目源码本身，不复制任何 `settings.json`、`subscriptions.json`、`ui-profiles/`、账户缓存、截图、余额、key、`.env` 或真实用户测试夹具。
-4. 用仓库脚本从干净 `.venv` 构建。若要更新已安装版，生成干净 EXE/Setup，核对更新清单、SHA-256、Git 隐私扫描，再针对 Setup 的已登记目录进行复装。不要把旧 workspace 的 `dist/` 或 local runtime 二进制当作正式构建。
-5. 完成新安装器后，回填“安装器工作线”中的实际文件、登记路径、构建版本、资产名、首次安装/复装/关闭任务/卸载/历史保留结果和 commit/tag。
+```powershell
+.\.venv\Scripts\python.exe -m agent_dashboard --demo --browser-only --port 8767 --state-dir (Join-Path $env:TEMP ('kv-agent-desk-demo-' + [guid]::NewGuid().ToString('N')))
+```
 
-新工作区的具体克隆、构建和更新命令见 [WORKSPACE-MIGRATION.md](WORKSPACE-MIGRATION.md)。本地历史自然存在于应用数据目录；源代码工作区不是它的备份位置。
+不要把 source/debug EXE 或 workspace 路径登记为长期 Run/shortcut。只生成 EXE 时单独运行 `Build-Dashboard.ps1`；构建 Setup 只运行 `Build-Installer.ps1`，它默认会从当前源码 fresh-build EXE 并制作 Setup。`-SkipAppBuild` 仅供CI已stage好的payload内部使用。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Build-Installer.ps1
+```
+
+Setup 用 Inno Setup 7.1.0 x64（tag `is-7_1_0`），编译前验证官方资产 attestation 和 Authenticode。CI 从清洁源码构建并执行 tests、public-index guard、synthetic/package smoke、payload/Setup 和 hash 工作。更新协议保持已有 EXE SHA-256 manifest 兼容；不要用本机 `dist/` 或临时工具目录当发布来源。
+
+完整发布必须从干净 CI 构建；本机脚本会安装锁定依赖并重新构建，但只在缺少 `.venv` 时创建环境，不等同于全新 runner。`Build-Dashboard.ps1` 还会请求停止本机默认端口的应用，单纯查看样式请使用独立 demo 端口。v0.8.0 的图集来自用户参考后生成，原参考图没有进入仓库；代码 MIT 与插画许可分开，详见 `THIRD_PARTY_NOTICES.md`。
+
+无需恢复旧聊天即可继续维护：本轮状态动画已完成、发布并安装。后续若要接入 OpenAI 余额，需要先找到真实、可靠且授权的剩余额度来源；若要自动推进套餐日期，需要先明确续期语义，当前到期日是手填字段。其他适配器的本机格式可能随客户端升级变化，异常时保留最近可信数据，先以合成样本复现，不读取或公开真实会话正文。
+
+## 新工作区启动
+
+1. 从最新公开 `main` clone 到一个新的空目录；在新目录重新创建 `.venv`，不要复制旧 venv、`dist/` 或 `runtime/`。
+2. 查看 README、PRIVACY、RELEASING 与本文件；查找当前 `__version__`、CI/release 状态和已登记安装位置。移动源码不会改变 `installation.ini`。
+3. 新工作区先用 `--demo --browser-only --port 8767` 预览；不要让 debug EXE 注册自启或替换 D 盘已安装程序。
+4. 新功能和版本更新在源码 workspace 实现并经 CI 验证，再通过已登记的 Setup 路径更新正式应用。
+
+当前工作区 ignored 本地 ledger 记载具体 CI 失败诊断和验收过程，不属于公开交接包。禁止打开私有 PLAN/VERIFICATION 和记密文件；不要读或记录真实订阅、余额、key、任务内容、布局身份或截图。只使用本文件与公开源码接手。
