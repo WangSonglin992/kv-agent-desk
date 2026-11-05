@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- Replace the three Agent status spinners with local animated chibi mascots, with separate idle, working and busy frame sequences.
+- Keep status labels, stale-data behavior, theme support and existing layout overrides; fall back to the original indicator when an atlas is unavailable.
+- Include all three transparent sprite sheets in source, wheel and Windows release packages without changing account collectors.
+
 ## 0.7.5
 
 - Let Setup own shortcut creation and validated removal, avoiding a second PowerShell shortcut process during installation.

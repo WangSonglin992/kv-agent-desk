@@ -12,6 +12,7 @@ import re
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from .mascots import has_mascot, mascot_frame
 from .ui_elements import ELEMENT_DEFINITIONS
 from .ui_scene import FittedText, SceneCanvas
 
@@ -215,8 +216,15 @@ def activity_state(data: dict) -> str:
     return "working" if data.get("state") == "working" else "idle"
 
 
+def _has_mascot(provider: object) -> bool:
+    try:
+        return isinstance(provider, str) and has_mascot(provider)
+    except Exception:
+        return False
+
+
 def is_animated(data: dict) -> bool:
-    """Whether this Agent card needs a changing spinner frame."""
+    """Whether this Agent card needs the faster working/busy refresh cadence."""
     return activity_state(data) in {"working", "busy"}
 
 
@@ -321,6 +329,52 @@ def _draw_spinner(draw: ImageDraw.ImageDraw, center: tuple[int, int], color: str
                "status_indicator", fill=fill)
 
 
+def _status_label(data: dict, status: str) -> str:
+    if status == "busy":
+        return "忙碌"
+    state = data.get("state")
+    canonical = {
+        "working": "工作中",
+        "waiting": "等待输入",
+        "idle": "空闲",
+        "offline": "未接入",
+        "unknown": "状态未知",
+    }.get(state, "状态未知")
+    supplied = clean(data.get("state_label"))
+    allowed_prefixes = {
+        "working": ("工作", "正在运行"),
+        "waiting": ("等待",),
+        "idle": ("空闲",),
+        "offline": ("未接入", "未运行", "未检测", "离线"),
+        "unknown": ("状态未知", "数据待更新", "待更新", "未知"),
+    }.get(state, ())
+    if supplied and len(supplied) <= 24 and supplied.startswith(allowed_prefixes):
+        return supplied
+    return canonical
+
+
+def _mascot_image(data: dict, animation_time: float | None) -> Image.Image | None:
+    provider = data.get("provider")
+    if not _has_mascot(provider):
+        return None
+    status = activity_state(data)
+    frame_state = status if status in {"working", "busy"} else "idle"
+    should_animate = status in {"working", "busy"} or data.get("state") in {"idle", "waiting"}
+    elapsed = animation_time if should_animate and isinstance(animation_time, (int, float)) \
+        and math.isfinite(animation_time) else 0.0
+    try:
+        frame = mascot_frame(provider, frame_state, elapsed, size=64)
+        if not isinstance(frame, Image.Image):
+            return None
+        if frame.mode != "RGBA":
+            frame = frame.convert("RGBA")
+        if frame.size != (64, 64):
+            frame = frame.resize((64, 64), Image.Resampling.LANCZOS)
+        return frame
+    except Exception:
+        return None
+
+
 def _card(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int,
           design: dict, provider: str = "", account: bool = False) -> None:
     colors, layout = design["colors"], design["layout"]
@@ -352,10 +406,7 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     status = activity_state(data)
     state_key = "busy" if status == "busy" else data.get("state")
     state_color = colors.get(state_key, colors["unknown"])
-    label = "忙碌" if status == "busy" else data.get("state_label") or {
-        "working": "工作中", "waiting": "等待输入", "idle": "空闲", "offline": "未接入",
-        "unknown": "状态未知",
-    }.get(data.get("state"), "状态未知")
+    label = _status_label(data, status)
 
     left, right = x + 28, x + width - 28
     logo_brand = _PROVIDER_LOGOS.get(provider)
@@ -368,17 +419,29 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     title_font = font(32 if provider != "antigravity" else 29, True, scale=scale)
     tag_font = font(18, False, scale=scale)
     chip_width = max(102, int(draw.textlength(label, font=state_font)) + 42)
-    chip_left = right - chip_width
-    _shape(draw, "rounded_rectangle", (chip_left, y + 24, right, y + 60), "status_badge", radius=18,
-           fill=_mix_color(colors["surface"], state_color, 0.12))
-    if is_animated(data):
-        period = animation_period(data) or 2.0
-        _draw_spinner(draw, (chip_left + 17, y + 42), state_color, colors["surface"], animation_time, period)
+    mascot = _mascot_image(data, animation_time) if image is not None else None
+    if mascot is not None and image is not None:
+        mascot_x = right - 64
+        mascot_y = y + 7
+        _paste(image, draw, mascot, (mascot_x, mascot_y), "status_indicator", mascot.getchannel("A"))
+        chip_right = mascot_x - 8
+        chip_left = chip_right - chip_width
+        _shape(draw, "rounded_rectangle", (chip_left, y + 24, chip_right, y + 60), "status_badge", radius=18,
+               fill=_mix_color(colors["surface"], state_color, 0.12))
+        _text(draw, (chip_left + 12, y + 27), short(draw, label, state_font, chip_width - 20),
+              "status_text", fill=state_color, font=state_font)
     else:
-        _shape(draw, "ellipse", (chip_left + 13, y + 38, chip_left + 21, y + 46),
-               "status_indicator", fill=state_color)
-    _text(draw, (chip_left + 29, y + 27), short(draw, label, state_font, chip_width - 39),
-          "status_text", fill=state_color, font=state_font)
+        chip_left = right - chip_width
+        _shape(draw, "rounded_rectangle", (chip_left, y + 24, right, y + 60), "status_badge", radius=18,
+               fill=_mix_color(colors["surface"], state_color, 0.12))
+        if status in {"working", "busy"}:
+            period = animation_period(data) or 2.0
+            _draw_spinner(draw, (chip_left + 17, y + 42), state_color, colors["surface"], animation_time, period)
+        else:
+            _shape(draw, "ellipse", (chip_left + 13, y + 38, chip_left + 21, y + 46),
+                   "status_indicator", fill=state_color)
+        _text(draw, (chip_left + 29, y + 27), short(draw, label, state_font, chip_width - 39),
+              "status_text", fill=state_color, font=state_font)
 
     available = max(0, chip_left - title_x - 10)
     name = short(draw, data.get("name", "Agent"), title_font, available)

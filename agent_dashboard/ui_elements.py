@@ -37,6 +37,7 @@ _AGENT_ELEMENTS = (
     ("name", "text", "Agent名称"),
     ("brand", "text", "品牌标签"),
     ("status_badge", "shape", "状态徽章"),
+    # Keep this legacy, position-only ID and kind; the renderer may paste a mascot bitmap here.
     ("status_indicator", "shape", "状态指示器"),
     ("status_text", "text", "状态文字"),
     ("task_label", "text", "任务标签"),

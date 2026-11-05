@@ -1,6 +1,6 @@
 # 第三方声明
 
-KV Agent Desk 本身按仓库根目录的 [MIT License](LICENSE) 发布。第三方代码、构建工具、品牌标志及协议参考仍受其各自许可或权利约束。
+KV Agent Desk 的源代码按仓库根目录的 [MIT License](LICENSE) 发布。第三方代码、构建工具、品牌标志、角色素材及协议参考仍受其各自许可或权利约束。
 
 ## 运行依赖
 
@@ -30,6 +30,7 @@ Inno Setup 7.1.0 x64 用于构建 Windows Setup 安装器，属于构建工具�
 - `agent_dashboard/assets/google.png` 取自 [Google 官方产品图标 CDN](https://www.gstatic.com/images/branding/product/2x/googleg_48dp.png)，使用 Pillow 转为 RGBA PNG，保留原 96 × 96 尺寸和颜色。
 - 上述商标和标识仍归各自权利人所有，仅用于识别仪表盘中的相应服务；本项目未重新绘制或重新着色这些标识。
 - KV Agent Desk 的 `app.ico` 与托盘图标由本项目绘制。
+- `mascot_chatgpt.png`、`mascot_glm.png`、`mascot_gemini.png` 是依据用户提供的角色参考、使用内置 OpenAI 图像生成工具制作的同人状态插画，各包含空闲、工作和忙碌三组动作。原始参考图不随程序分发。三张生成图集按 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 提供，署名 KV Agent Desk contributors；此许可仅涉及生成的图集，不授予原角色设定或品牌商标的权利。它们不是供应商官方吉祥物；代码的 MIT 许可保持独立。来源和提示词说明见 [`agent_dashboard/assets/SOURCES.md`](agent_dashboard/assets/SOURCES.md) 与 [`docs/MASCOT-ANIMATIONS.md`](docs/MASCOT-ANIMATIONS.md)。
 - 界面方向参考 [MacTR AI](https://github.com/m1ng-li/mac-thermalright-ai-monitor) 的 LCD Agent 仪表盘。本项目没有复制其源代码或图像资源。
 
 ## 设备协议与 API 参考

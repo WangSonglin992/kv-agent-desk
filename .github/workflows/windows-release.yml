@@ -120,6 +120,9 @@ jobs:
             "--add-data", "agent_dashboard/assets/chatgpt.png;agent_dashboard/assets",
             "--add-data", "agent_dashboard/assets/glm.png;agent_dashboard/assets",
             "--add-data", "agent_dashboard/assets/google.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/mascot_chatgpt.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/mascot_glm.png;agent_dashboard/assets",
+            "--add-data", "agent_dashboard/assets/mascot_gemini.png;agent_dashboard/assets",
             "run_dashboard.py"
           )
           python -m PyInstaller @pyinstallerArgs
@@ -128,6 +131,23 @@ jobs:
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             throw "PyInstaller did not create $exe"
           }
+
+      - name: Verify bundled mascot atlases
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          from PyInstaller.archive.readers import CArchiveReader
+          archive = CArchiveReader("dist/KV-Agent-Desk.exe")
+          entries = {name.replace("\\", "/"): name for name in archive.toc}
+          for character in ("chatgpt", "glm", "gemini"):
+              source = Path(f"agent_dashboard/assets/mascot_{character}.png")
+              key = source.as_posix()
+              assert key in entries, f"Packaged executable is missing {key}"
+              assert archive.extract(entries[key]) == source.read_bytes(), f"Packaged atlas differs from source: {key}"
+          print("Verified three public mascot atlases in the executable")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Packaged executable smoke test
         shell: pwsh

@@ -15,7 +15,7 @@ ROOT_FILES = {
     "requirements-build.lock.txt", "Build-Dashboard.ps1", "Build-Installer.ps1", "Start-Dashboard.cmd",
     "Stop-Dashboard.cmd", "run_dashboard.py",
 }
-ASSETS = {"app.ico", "deepseek.png", "deepseek.ico", "deepseek.svg", "chatgpt.png", "glm.png", "google.png", "SOURCES.md"}
+ASSETS = {"app.ico", "deepseek.png", "deepseek.ico", "deepseek.svg", "chatgpt.png", "glm.png", "google.png", "mascot_chatgpt.png", "mascot_glm.png", "mascot_gemini.png", "SOURCES.md"}
 BINARY_FILES = {"agent_dashboard/assets/" + name for name in ASSETS if name.endswith((".ico", ".png"))}
 BINARY_FILES.add("docs/images/dashboard-demo.png")
 PATTERNS = {

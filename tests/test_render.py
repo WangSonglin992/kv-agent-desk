@@ -1,12 +1,14 @@
 import unittest
 from copy import deepcopy
 from datetime import datetime
+from unittest.mock import patch
 from PIL import Image, ImageChops, ImageDraw
 from agent_dashboard.render import (
     activity_state,
     _agent_metrics,
     _draw_agent_header,
     _resolve_design,
+    _status_label,
     font,
     animation_period,
     expiry_text,
@@ -14,6 +16,7 @@ from agent_dashboard.render import (
     logo,
     number,
     render,
+    render_scene,
 )
 
 
@@ -177,11 +180,11 @@ class RenderTests(unittest.TestCase):
 
         normal_card = render({"agents": [waiting]}, stamp, animation_time=0.0)
         busy_card = render(snapshot, stamp, animation_time=0.0)
-        busy_red = (0xF0, 0x64, 0x69)
-        normal_badge = normal_card.crop((400, 95, 530, 140))
-        busy_badge = busy_card.crop((400, 95, 530, 140))
-        self.assertNotIn(busy_red, normal_badge.get_flattened_data())
-        self.assertIn(busy_red, busy_badge.get_flattened_data())
+        normal_badge = normal_card.crop((350, 95, 452, 140)).convert("RGB").get_flattened_data()
+        busy_badge = busy_card.crop((350, 95, 452, 140)).convert("RGB").get_flattened_data()
+        is_busy_accent = lambda rgb: rgb[0] > 150 and rgb[0] > rgb[1] * 1.35 and rgb[0] > rgb[2] * 1.35
+        self.assertFalse(any(is_busy_accent(rgb) for rgb in normal_badge))
+        self.assertTrue(any(is_busy_accent(rgb) for rgb in busy_badge))
 
     def test_unknown_antigravity_model_count_never_means_busy(self):
         agent = {
@@ -195,6 +198,87 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(activity_state(agent), "idle")
         self.assertFalse(is_animated(agent))
         self.assertIsNone(animation_period(agent))
+
+    def test_status_caption_uses_state_and_rejects_misleading_unknown_labels(self):
+        self.assertEqual(_status_label({"state": "working", "state_label": "工作中"}, "working"), "工作中")
+        self.assertEqual(_status_label({"state": "waiting", "state_label": "等待输入"}, "idle"), "等待输入")
+        self.assertEqual(_status_label({"state": "offline", "state_label": "未运行"}, "idle"), "未运行")
+        self.assertEqual(_status_label({"state": "unknown", "state_label": "已连接"}, "idle"), "状态未知")
+        self.assertEqual(_status_label({"state": "unknown", "state_label": "数据待更新", "stale": True}, "idle"),
+                         "数据待更新")
+        self.assertEqual(_status_label({"state": "waiting"}, "busy"), "忙碌")
+
+    def test_idle_and_waiting_mascots_use_regular_refresh_without_fast_cadence(self):
+        with patch("agent_dashboard.render.has_mascot", return_value=True):
+            for state in ("idle", "waiting", "unknown", "offline"):
+                self.assertFalse(is_animated({"provider": "codex", "state": state}))
+
+    def test_idle_mascot_advances_with_regular_render_time(self):
+        snapshot = {"agents": [{"provider": "codex", "name": "Codex", "state": "idle"}]}
+
+        def fake_frame(provider, state, elapsed, size=64):
+            shade = 40 if elapsed < 1 else 200
+            return Image.new("RGBA", (size, size), (shade, 80, 160, 255))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            first = render(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), animation_time=0.0)
+            next_second = render(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), animation_time=1.0)
+
+        self.assertFalse(is_animated(snapshot["agents"][0]))
+        self.assertIsNotNone(ImageChops.difference(first, next_second).getbbox())
+
+    def test_mascot_header_states_fit_above_content_in_all_themes(self):
+        snapshot = {
+            "agents": [
+                {"provider": "codex", "name": "Codex", "state": "working", "state_label": "工作中",
+                 "active_tasks": 2, "active_tasks_known": True},
+                {"provider": "zcode", "name": "ZCode", "state": "waiting", "state_label": "等待输入",
+                 "active_tasks": 1, "active_tasks_known": True},
+                {"provider": "antigravity", "name": "Antigravity", "state": "unknown",
+                 "state_label": "已连接", "active_tasks_known": False, "stale": True},
+            ]
+        }
+        requests = []
+
+        def fake_frame(provider, state, elapsed, size=64):
+            requests.append((provider, state, elapsed, size))
+            tint = int((elapsed % 1.0) * 200) + 20
+            return Image.new("RGBA", (size, size), (tint, 80, 160, 255))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            for layout in ("classic", "aurora", "paper"):
+                first, manifest = render_scene(
+                    snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), {"id": layout, "layout": layout}, 0.0)
+                second = render(
+                    snapshot, datetime(2035, 1, 2, 12, 0).astimezone(),
+                    {"id": layout, "layout": layout}, 0.5)
+                self.assertIsNotNone(ImageChops.difference(first, second).getbbox(), layout)
+                nodes = {item["id"]: item for item in manifest}
+                for provider in ("codex", "zcode", "antigravity"):
+                    indicator = nodes[f"agent.{provider}.status_indicator"]
+                    badge = nodes[f"agent.{provider}.status_badge"]
+                    caption = nodes[f"agent.{provider}.status_text"]
+                    self.assertEqual((indicator["bbox"][2] - indicator["bbox"][0],
+                                      indicator["bbox"][3] - indicator["bbox"][1]), (64, 64))
+                    self.assertLessEqual(indicator["bbox"][3], 76 + 71)
+                    self.assertLessEqual(badge["bbox"][3], 76 + 60)
+                    self.assertTrue(caption["visible"])
+                    header_ids = {"panel", "logo", "name", "brand", "status_badge",
+                                  "status_indicator", "status_text", "stale_note"}
+                    for identity, node in nodes.items():
+                        prefix = f"agent.{provider}."
+                        if not identity.startswith(prefix) or identity[len(prefix):] in header_ids:
+                            continue
+                        box = node["bbox"]
+                        mascot_box = indicator["bbox"]
+                        overlaps = (box[0] < mascot_box[2] and box[2] > mascot_box[0]
+                                    and box[1] < mascot_box[3] and box[3] > mascot_box[1])
+                        self.assertFalse(overlaps, identity)
+        self.assertIn(("codex", "working", 0.0, 64), requests)
+        self.assertIn(("zcode", "idle", 0.0, 64), requests)
+        self.assertIn(("antigravity", "idle", 0.0, 64), requests)
 
     def test_antigravity_explicit_known_task_count_can_be_busy(self):
         agent = {"provider": "antigravity", "state": "waiting", "active_tasks": 4,

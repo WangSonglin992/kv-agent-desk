@@ -2,7 +2,9 @@ import json
 import unittest
 from copy import deepcopy
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from PIL import Image
 from PIL import ImageChops
 
 from agent_dashboard.render import render, render_scene
@@ -120,6 +122,37 @@ class EditorRenderTests(unittest.TestCase):
                                                    grouped_image.crop(zcode_header)).getbbox())
         self.assertEqual(snapshot, original_snapshot)
         self.assertEqual(profile, original_profile)
+
+    def test_legacy_status_offsets_move_mascot_badge_and_caption(self):
+        snapshot = scene_snapshot()
+
+        def fake_frame(provider, state, elapsed, size=64):
+            return Image.new("RGBA", (size, size), (30, 120, 200, 255))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            _, base_manifest = render_scene(snapshot, NOW, {"id": "classic", "layout": "classic"}, 0)
+            profile = {"id": "mascot-editor", "layout": "classic", "elements": {
+                "agent.zcode": {"dx": 11, "dy": 7},
+                "agent.zcode.status_badge": {"dx": 2, "dy": 3},
+                "agent.zcode.status_indicator": {"dx": -4, "dy": 1},
+                "agent.zcode.status_text": {"dx": 4, "dy": 5},
+            }}
+            _, moved_manifest = render_scene(snapshot, NOW, profile, 0)
+
+        base = {node["id"]: node for node in base_manifest}
+        moved = {node["id"]: node for node in moved_manifest}
+        for identity, delta in (("agent.zcode.status_badge", (13, 10)),
+                                ("agent.zcode.status_indicator", (7, 8)),
+                                ("agent.zcode.status_text", (15, 12))):
+            before_box = base[identity]["bbox"]
+            dx, dy = delta
+            self.assertEqual(moved[identity]["bbox"],
+                             [before_box[0] + dx, before_box[1] + dy,
+                              before_box[2] + dx, before_box[3] + dy])
+        self.assertEqual(base["agent.zcode.status_indicator"]["kind"], "shape")
+        self.assertEqual(moved["agent.zcode.status_indicator"]["bbox"][2] -
+                         moved["agent.zcode.status_indicator"]["bbox"][0], 64)
 
 
 if __name__ == "__main__":
