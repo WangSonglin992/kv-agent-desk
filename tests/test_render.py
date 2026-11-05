@@ -180,8 +180,8 @@ class RenderTests(unittest.TestCase):
 
         normal_card = render({"agents": [waiting]}, stamp, animation_time=0.0)
         busy_card = render(snapshot, stamp, animation_time=0.0)
-        normal_badge = normal_card.crop((350, 95, 452, 140)).convert("RGB").get_flattened_data()
-        busy_badge = busy_card.crop((350, 95, 452, 140)).convert("RGB").get_flattened_data()
+        normal_badge = normal_card.crop((52, 130, 165, 160)).convert("RGB").get_flattened_data()
+        busy_badge = busy_card.crop((52, 130, 165, 160)).convert("RGB").get_flattened_data()
         is_busy_accent = lambda rgb: rgb[0] > 150 and rgb[0] > rgb[1] * 1.35 and rgb[0] > rgb[2] * 1.35
         self.assertFalse(any(is_busy_accent(rgb) for rgb in normal_badge))
         self.assertTrue(any(is_busy_accent(rgb) for rgb in busy_badge))
@@ -216,7 +216,7 @@ class RenderTests(unittest.TestCase):
     def test_idle_mascot_advances_with_regular_render_time(self):
         snapshot = {"agents": [{"provider": "codex", "name": "Codex", "state": "idle"}]}
 
-        def fake_frame(provider, state, elapsed, size=64):
+        def fake_frame(provider, state, elapsed, size=144):
             shade = 40 if elapsed < 1 else 200
             return Image.new("RGBA", (size, size), (shade, 80, 160, 255))
 
@@ -241,44 +241,62 @@ class RenderTests(unittest.TestCase):
         }
         requests = []
 
-        def fake_frame(provider, state, elapsed, size=64):
+        def fake_frame(provider, state, elapsed, size=144):
             requests.append((provider, state, elapsed, size))
             tint = int((elapsed % 1.0) * 200) + 20
             return Image.new("RGBA", (size, size), (tint, 80, 160, 255))
 
+        overlaps = lambda a, b: (a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1])
         with patch("agent_dashboard.render.has_mascot", return_value=True), \
                 patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
             for layout in ("classic", "aurora", "paper"):
-                first, manifest = render_scene(
-                    snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), {"id": layout, "layout": layout}, 0.0)
-                second = render(
-                    snapshot, datetime(2035, 1, 2, 12, 0).astimezone(),
-                    {"id": layout, "layout": layout}, 0.5)
-                self.assertIsNotNone(ImageChops.difference(first, second).getbbox(), layout)
-                nodes = {item["id"]: item for item in manifest}
-                for provider in ("codex", "zcode", "antigravity"):
-                    indicator = nodes[f"agent.{provider}.status_indicator"]
-                    badge = nodes[f"agent.{provider}.status_badge"]
-                    caption = nodes[f"agent.{provider}.status_text"]
-                    self.assertEqual((indicator["bbox"][2] - indicator["bbox"][0],
-                                      indicator["bbox"][3] - indicator["bbox"][1]), (64, 64))
-                    self.assertLessEqual(indicator["bbox"][3], 76 + 71)
-                    self.assertLessEqual(badge["bbox"][3], 76 + 60)
-                    self.assertTrue(caption["visible"])
-                    header_ids = {"panel", "logo", "name", "brand", "status_badge",
-                                  "status_indicator", "status_text", "stale_note"}
-                    for identity, node in nodes.items():
-                        prefix = f"agent.{provider}."
-                        if not identity.startswith(prefix) or identity[len(prefix):] in header_ids:
-                            continue
-                        box = node["bbox"]
-                        mascot_box = indicator["bbox"]
-                        overlaps = (box[0] < mascot_box[2] and box[2] > mascot_box[0]
-                                    and box[1] < mascot_box[3] and box[3] > mascot_box[1])
-                        self.assertFalse(overlaps, identity)
-        self.assertIn(("codex", "working", 0.0, 64), requests)
-        self.assertIn(("zcode", "idle", 0.0, 64), requests)
-        self.assertIn(("antigravity", "idle", 0.0, 64), requests)
+                for font_scale in (90, 100, 115):
+                    profile = {"id": layout, "layout": layout, "font_scale": font_scale}
+                    first, manifest = render_scene(
+                        snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), profile, 0.0)
+                    second = render(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), profile,
+                                    animation_time=0.5)
+                    self.assertIsNotNone(ImageChops.difference(first, second).getbbox(), (layout, font_scale))
+                    nodes = {item["id"]: item for item in manifest}
+                    for provider in ("codex", "zcode", "antigravity"):
+                        indicator = nodes[f"agent.{provider}.status_indicator"]
+                        badge = nodes[f"agent.{provider}.status_badge"]
+                        caption = nodes[f"agent.{provider}.status_text"]
+                        self.assertTrue(nodes[f"agent.{provider}.name"]["visible"])
+                        self.assertTrue(nodes[f"agent.{provider}.brand"]["visible"])
+                        self.assertEqual((indicator["bbox"][2] - indicator["bbox"][0],
+                                          indicator["bbox"][3] - indicator["bbox"][1]), (144, 144))
+                        self.assertEqual(indicator["bbox"][1], 76 + 7)
+                        self.assertLessEqual(indicator["bbox"][3], 76 + 151)
+                        self.assertEqual(badge["bbox"][1], 76 + 54)
+                        self.assertLessEqual(badge["bbox"][3], 76 + 80)
+                        self.assertTrue(caption["visible"])
+                        self.assertGreaterEqual(caption["bbox"][1], badge["bbox"][1])
+                        self.assertLessEqual(caption["bbox"][3], badge["bbox"][3])
+                        header_ids = {"panel", "logo", "name", "brand", "status_badge",
+                                      "status_indicator", "status_text", "stale_note"}
+                        body_ids = {identity for identity in nodes
+                                    if identity.startswith(f"agent.{provider}.")
+                                    and identity[len(f"agent.{provider}."):] not in header_ids}
+                        for identity in body_ids:
+                            body_box = nodes[identity]["bbox"]
+                            self.assertFalse(overlaps(body_box, indicator["bbox"]),
+                                             (identity, layout, font_scale))
+                        for header_suffix in ("logo", "name", "brand", "status_indicator", "status_text"):
+                            header_box = nodes[f"agent.{provider}.{header_suffix}"]["bbox"]
+                            for identity in body_ids:
+                                self.assertFalse(overlaps(header_box, nodes[identity]["bbox"]),
+                                                 (header_suffix, identity, layout, font_scale))
+                        self.assertFalse(overlaps(nodes[f"agent.{provider}.task_label"]["bbox"],
+                                                  nodes[f"agent.{provider}.task_count"]["bbox"]))
+                        self.assertFalse(overlaps(nodes[f"agent.{provider}.plan_name"]["bbox"],
+                                                  nodes[f"agent.{provider}.plan_spec"]["bbox"]))
+                        self.assertFalse(overlaps(nodes[f"agent.{provider}.tokens_input"]["bbox"],
+                                                  nodes[f"agent.{provider}.tokens_cached"]["bbox"]))
+                        self.assertLessEqual(nodes[f"agent.{provider}.week_reset"]["bbox"][3], 450)
+        self.assertIn(("codex", "working", 0.0, 144), requests)
+        self.assertIn(("zcode", "idle", 0.0, 144), requests)
+        self.assertIn(("antigravity", "idle", 0.0, 144), requests)
 
     def test_antigravity_explicit_known_task_count_can_be_busy(self):
         agent = {"provider": "antigravity", "state": "waiting", "active_tasks": 4,
@@ -316,7 +334,16 @@ class RenderTests(unittest.TestCase):
         stamp = datetime(2035, 1, 2, 12, 0).astimezone()
         snapshot = self.sample_snapshot()
         profile = {"id": "aurora", "layout": "aurora"}
-        original = render(snapshot, stamp, profile, animation_time=0)
+        original, manifest = render_scene(snapshot, stamp, profile, animation_time=0)
+        nodes = {item["id"]: item for item in manifest}
+        self.assertTrue(nodes["agent.antigravity.weekly_bar_reset"]["visible"])
+        reset = nodes["agent.antigravity.weekly_bar_reset"]["bbox"]
+        label = nodes["agent.antigravity.weekly_label"]["bbox"]
+        percent = nodes["agent.antigravity.weekly_percent"]["bbox"]
+        self.assertFalse(reset[0] < label[2] and reset[2] > label[0]
+                         and reset[1] < label[3] and reset[3] > label[1])
+        self.assertFalse(reset[0] < percent[2] and reset[2] > percent[0]
+                         and reset[1] < percent[3] and reset[3] > percent[1])
         region = (1140, 220, 1630, 285)
         for field, value in (("plan_name", "Different synthetic plan"),
                              ("plan_spec", "Different synthetic tier"),
@@ -336,13 +363,70 @@ class RenderTests(unittest.TestCase):
                 data = {"provider": provider, "name": name, "state": "idle"}
                 _draw_agent_header(image, draw, data, 24, 76, 528, design, 0)
                 title_font = font(29 if provider == "antigravity" else 32, True)
-                _, top, _, bottom = draw.textbbox((0, 93), name, font=title_font)
-                region = (49, 82, 84, 146)
+                _, top, _, bottom = draw.textbbox((0, 86), name, font=title_font)
+                region = (49, 82, 84, 129)
                 pixels = image.crop(region)
                 bbox = ImageChops.difference(pixels, Image.new("RGB", pixels.size, surface)).getbbox()
                 self.assertIsNotNone(bbox)
                 actual = region[1] + (bbox[1] + bbox[3]) / 2
                 self.assertLessEqual(abs(actual - (top + bottom) / 2), 1.5, (provider, layout))
+
+    def test_short_geometry_uses_smaller_portrait_and_keeps_metadata_and_footer_inside_card(self):
+        snapshot = self.sample_snapshot()
+        requests = []
+
+        def fake_frame(provider, state, elapsed, size=144):
+            requests.append((provider, size))
+            return Image.new("RGBA", (size, size), (30, 120, 200, 255))
+
+        profile = {"id": "short-card", "layout": "classic", "font_scale": 115,
+                   "geometry": {"margin": 64, "gap": 32, "account_width": 320,
+                                "top": 104, "bottom": 420}}
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            _, manifest = render_scene(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), profile, 0)
+
+        nodes = {item["id"]: item for item in manifest}
+        card = nodes["agent.antigravity"]
+        indicator = nodes["agent.antigravity.status_indicator"]
+        self.assertEqual(card["bbox"], [1044, 104, 1502, 420])
+        self.assertEqual((indicator["bbox"][2] - indicator["bbox"][0],
+                          indicator["bbox"][3] - indicator["bbox"][1]), (112, 112))
+        self.assertTrue(nodes["agent.antigravity.name"]["visible"])
+        self.assertTrue(nodes["agent.antigravity.brand"]["visible"])
+        for suffix in ("plan_label", "plan_name", "plan_spec", "plan_expiry", "weekly_label",
+                       "weekly_bar", "tokens_label", "tokens_total", "tokens_input", "tokens_output",
+                       "tokens_cached", "five_hour_label", "five_hour_reset", "week_label", "week_reset"):
+            self.assertTrue(nodes[f"agent.antigravity.{suffix}"]["visible"], suffix)
+        self.assertLessEqual(nodes["agent.antigravity.week_reset"]["bbox"][3], card["bbox"][3])
+        self.assertGreaterEqual(nodes["agent.antigravity.week_reset"]["default_font_size"], 12)
+        self.assertIn(("antigravity", 112), requests)
+
+        body = nodes["agent.antigravity.task_label"]["bbox"]
+        count = nodes["agent.antigravity.task_count"]["bbox"]
+        self.assertFalse(body[0] < count[2] and body[2] > count[0]
+                         and body[1] < count[3] and body[3] > count[1])
+        for suffix in ("task_label", "task_count", "plan_label", "plan_name", "plan_spec", "plan_expiry",
+                       "weekly_label", "weekly_bar", "tokens_label", "tokens_total", "tokens_input",
+                       "tokens_output", "tokens_cached", "five_hour_label", "five_hour_reset",
+                       "week_label", "week_reset"):
+            box = nodes[f"agent.antigravity.{suffix}"]["bbox"]
+            overlaps = (box[0] < indicator["bbox"][2] and box[2] > indicator["bbox"][0]
+                        and box[1] < indicator["bbox"][3] and box[3] > indicator["bbox"][1])
+            self.assertFalse(overlaps, suffix)
+
+    def test_missing_mascot_frame_falls_back_to_animated_status_indicator(self):
+        snapshot = {"agents": [{"provider": "codex", "name": "Codex", "state": "working"}]}
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", return_value=None):
+            first, manifest = render_scene(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), animation_time=0)
+            second = render(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), animation_time=0.5)
+        nodes = {item["id"]: item for item in manifest}
+        indicator = nodes["agent.codex.status_indicator"]
+        self.assertEqual(indicator["kind"], "shape")
+        self.assertTrue(nodes["agent.codex.status_text"]["visible"])
+        self.assertEqual(nodes["agent.codex.status_badge"]["bbox"][1], 76 + 54)
+        self.assertIsNotNone(ImageChops.difference(first, second).getbbox())
 
     def test_unreliable_count_does_not_trigger_busy(self):
         agent = {"provider": "zcode", "state": "working", "active_tasks": 8,

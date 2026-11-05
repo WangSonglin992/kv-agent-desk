@@ -353,7 +353,7 @@ def _status_label(data: dict, status: str) -> str:
     return canonical
 
 
-def _mascot_image(data: dict, animation_time: float | None) -> Image.Image | None:
+def _mascot_image(data: dict, animation_time: float | None, size: int = 144) -> Image.Image | None:
     provider = data.get("provider")
     if not _has_mascot(provider):
         return None
@@ -363,13 +363,13 @@ def _mascot_image(data: dict, animation_time: float | None) -> Image.Image | Non
     elapsed = animation_time if should_animate and isinstance(animation_time, (int, float)) \
         and math.isfinite(animation_time) else 0.0
     try:
-        frame = mascot_frame(provider, frame_state, elapsed, size=64)
+        frame = mascot_frame(provider, frame_state, elapsed, size=size)
         if not isinstance(frame, Image.Image):
             return None
         if frame.mode != "RGBA":
             frame = frame.convert("RGBA")
-        if frame.size != (64, 64):
-            frame = frame.resize((64, 64), Image.Resampling.LANCZOS)
+        if frame.size != (size, size):
+            frame = frame.resize((size, size), Image.Resampling.LANCZOS)
         return frame
     except Exception:
         return None
@@ -397,7 +397,7 @@ def _card(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int,
 
 def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, data: dict,
                        x: int, y: int, width: int, design: dict,
-                       animation_time: float | None) -> tuple[int, int]:
+                       animation_time: float | None, height: int = 374) -> tuple[int, int]:
     colors, scale = design["colors"], design["font_scale"]
     provider = data.get("provider", "")
     if not isinstance(draw, SceneCanvas):
@@ -419,33 +419,41 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     title_font = font(32 if provider != "antigravity" else 29, True, scale=scale)
     tag_font = font(18, False, scale=scale)
     chip_width = max(102, int(draw.textlength(label, font=state_font)) + 42)
-    mascot = _mascot_image(data, animation_time) if image is not None else None
+    _, caption_top, _, caption_bottom = draw.textbbox((0, 0), label, font=state_font)
+    caption_y = y + 67 - (caption_top + caption_bottom) / 2
+    mascot_size = max(112, min(144, height - 230, width - 346))
+    mascot_x = right - mascot_size
+    mascot = _mascot_image(data, animation_time, mascot_size) if image is not None else None
     if mascot is not None and image is not None:
-        mascot_x = right - 64
         mascot_y = y + 7
         _paste(image, draw, mascot, (mascot_x, mascot_y), "status_indicator", mascot.getchannel("A"))
-        chip_right = mascot_x - 8
-        chip_left = chip_right - chip_width
-        _shape(draw, "rounded_rectangle", (chip_left, y + 24, chip_right, y + 60), "status_badge", radius=18,
+        chip_left = left
+        _shape(draw, "rounded_rectangle", (chip_left, y + 54, chip_left + chip_width, y + 80), "status_badge", radius=13,
                fill=_mix_color(colors["surface"], state_color, 0.12))
-        _text(draw, (chip_left + 12, y + 27), short(draw, label, state_font, chip_width - 20),
+        _text(draw, (chip_left + 12, caption_y), short(draw, label, state_font, chip_width - 20),
               "status_text", fill=state_color, font=state_font)
     else:
-        chip_left = right - chip_width
-        _shape(draw, "rounded_rectangle", (chip_left, y + 24, right, y + 60), "status_badge", radius=18,
+        chip_left = left
+        _shape(draw, "rounded_rectangle", (chip_left, y + 54, chip_left + chip_width, y + 80), "status_badge", radius=13,
                fill=_mix_color(colors["surface"], state_color, 0.12))
         if status in {"working", "busy"}:
             period = animation_period(data) or 2.0
-            _draw_spinner(draw, (chip_left + 17, y + 42), state_color, colors["surface"], animation_time, period)
+            _draw_spinner(draw, (chip_left + 17, y + 67), state_color, colors["surface"], animation_time, period)
         else:
-            _shape(draw, "ellipse", (chip_left + 13, y + 38, chip_left + 21, y + 46),
+            _shape(draw, "ellipse", (chip_left + 13, y + 63, chip_left + 21, y + 71),
                    "status_indicator", fill=state_color)
-        _text(draw, (chip_left + 29, y + 27), short(draw, label, state_font, chip_width - 39),
+        _text(draw, (chip_left + 29, caption_y), short(draw, label, state_font, chip_width - 39),
               "status_text", fill=state_color, font=state_font)
 
-    available = max(0, chip_left - title_x - 10)
-    name = short(draw, data.get("name", "Agent"), title_font, available)
-    title_y = y + 17
+    available = max(0, mascot_x - title_x - 10)
+    tag = _PROVIDER_TAGS.get(provider)
+    tag_width = draw.textlength(tag, font=tag_font) if tag else 0
+    full_name = clean(data.get("name", "Agent")) or "Agent"
+    full_name_width = draw.textlength(full_name, font=title_font)
+    tag_on_title = bool(tag and full_name_width + tag_width + 18 <= available)
+    title_room = available - (tag_width + 18 if tag_on_title else 0)
+    name = short(draw, full_name, title_font, title_room)
+    title_y = y + 10
     _, ink_top, _, ink_bottom = draw.textbbox((title_x, title_y), name, font=title_font)
     center_y = (ink_top + ink_bottom) / 2
     if image is not None and icon is not None:
@@ -462,20 +470,24 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
         _paste(image, draw, icon, (icon_x, round(center_y - icon.height / 2)), "logo", icon)
     _text(draw, (title_x, title_y), name, "name", fill=accent, font=title_font)
     title_width = draw.textlength(name, font=title_font)
-    tag = _PROVIDER_TAGS.get(provider)
     if tag:
-        tag_x = title_x + title_width + 10
-        remaining = chip_left - tag_x - 8
+        tag_x = title_x + title_width + 10 if tag_on_title else left + chip_width + 8
+        remaining = mascot_x - tag_x - 8
         if remaining >= 30:
             tag = short(draw, tag, tag_font, remaining)
-            _, tag_top, _, tag_bottom = draw.textbbox((0, 0), tag, font=tag_font)
-            tag_y = round(center_y - (tag_top + tag_bottom) / 2)
+            if tag_on_title:
+                _, tag_top, _, tag_bottom = draw.textbbox((0, 0), tag, font=tag_font)
+                tag_y = round(center_y - (tag_top + tag_bottom) / 2)
+            else:
+                _, tag_top, _, tag_bottom = draw.textbbox((0, 0), tag, font=tag_font)
+                tag_y = y + 67 - (tag_top + tag_bottom) / 2
             _text(draw, (tag_x, tag_y), tag, "brand", fill=colors["subtle"], font=tag_font)
     return left, right
 
 
 def _draw_progress(draw: ImageDraw.ImageDraw, left: int, right: int, y: int, data: dict,
-                   design: dict, metrics: dict, compact: bool = False) -> None:
+                   design: dict, metrics: dict, compact: bool = False, density: float = 1.0,
+                   show_reset: bool = False) -> None:
     colors, scale = design["colors"], design["font_scale"]
     provider = metrics["provider"]
     window = metrics["primary"]
@@ -484,18 +496,36 @@ def _draw_progress(draw: ImageDraw.ImageDraw, left: int, right: int, y: int, dat
     title_font = font(18 if compact else 20, scale=scale)
     pct_font = font(20 if compact else 22, True, True, scale)
     usable = right - left
+    label_text = title if percent is not None else "额度待更新"
+    pct_text = f"{percent:g}%" if percent is not None else "—"
+    pct_width = draw.textlength(pct_text, font=pct_font)
+    reset = _window_reset(window) if show_reset else ""
+    reset_font = font(14, scale=scale)
+    reset_width = draw.textlength(reset, font=reset_font) if reset else 0
+    if show_reset:
+        label_width = min(draw.textlength(label_text, font=title_font),
+                          max(0, usable - pct_width - reset_width - 36))
+        label_room = label_width
+        reset_x = left + max(96, label_width + 12)
+        reset_room = max(0, right - pct_width - 12 - reset_x)
+        reset_text = short(draw, reset, reset_font, reset_room)
+    else:
+        label_room = usable
+        reset_x = 0
+        reset_text = ""
     if percent is None:
-        text = "额度待更新"
-        _text(draw, (left, y), short(draw, text, title_font, usable), "weekly_label",
+        _text(draw, (left, y), short(draw, label_text, title_font, label_room), "weekly_label",
               fill=colors["muted"], font=title_font)
     else:
-        title_width = max(60, usable - int(draw.textlength(f"{percent:g}%", font=pct_font)) - 20)
+        title_width = label_room if show_reset else max(60, usable - int(pct_width) - 20)
         _text(draw, (left, y), short(draw, title, title_font, title_width), "weekly_label",
               fill=colors["muted"], font=title_font)
-    pct_text = f"{percent:g}%" if percent is not None else "—"
-    _text(draw, (right - draw.textlength(pct_text, font=pct_font), y - 1), pct_text, "weekly_percent",
+    _text(draw, (right - pct_width, y - 1), pct_text, "weekly_percent",
           fill=colors.get(provider, colors["text"]), font=pct_font, visible=percent is not None)
-    bar_y = y + (28 if compact else 32)
+    if show_reset:
+        _text(draw, (reset_x, y + 1), reset_text, "weekly_bar_reset",
+              fill=colors["subtle"], font=reset_font)
+    bar_y = y + (max(22, round(28 * density)) if compact else 32)
     _shape(draw, "rounded_rectangle", (left, bar_y, right, bar_y + 7), "weekly_bar",
            radius=4, fill=colors["surface_alt"])
     if percent is not None and percent > 0:
@@ -504,59 +534,22 @@ def _draw_progress(draw: ImageDraw.ImageDraw, left: int, right: int, y: int, dat
                "weekly_bar", radius=4, fill=colors.get(provider, colors["working"]))
 
 
-def _draw_plan(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, width: int,
-               design: dict, compact: bool = False) -> None:
-    colors, scale = design["colors"], design["font_scale"]
-    subscription = data.get("subscription") or {}
-    if compact:
-        prefix_font, value_font, detail_font = font(18, scale=scale), font(22, True, scale=scale), font(18, scale=scale)
-        line_gap = 24
-    else:
-        prefix_font, value_font, detail_font = font(16, scale=scale), font(22, True, scale=scale), font(16, scale=scale)
-        line_gap = 27
-    _text(draw, (x, y), "订阅套餐", "plan_label", fill=colors["muted"], font=prefix_font)
-    _text(draw, (x, y + line_gap), short(draw, subscription.get("plan_name") or "套餐待填写", value_font, width),
-          "plan_name", fill=colors["text"] if subscription.get("plan_name") else colors["subtle"], font=value_font)
-    spec = subscription.get("plan_spec") or "规格待填写"
-    _text(draw, (x, y + line_gap * 2), short(draw, spec, detail_font, width), "plan_spec",
-          fill=colors["muted"], font=detail_font)
-    expiry = expiry_text(subscription.get("expires_at"))
-    _text(draw, (x, y + line_gap * 3), short(draw, expiry, detail_font, width), "plan_expiry",
-          fill=colors["subtle"], font=detail_font)
-
-
-def _draw_token_block(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, width: int,
-                      design: dict, metrics: dict, size: int = 38) -> None:
-    colors, scale = design["colors"], design["font_scale"]
-    tokens = metrics["tokens"]
-    value = metrics["token_value"]
-    main = number(value if isinstance(value, int) and not isinstance(value, bool) else None)
-    label = metrics["date_label"]
-    input_text = f"入 {number(tokens.get('input'))}  /  "
-    output_text = f"出 {number(tokens.get('output'))}"
-    tail = f"缓存 {number(tokens.get('cached'))}"
-    label_font, main_font = font(16, scale=scale), font(size, True, True, scale)
-    detail_font, tail_font = font(16, scale=scale), font(14, scale=scale)
-    _text(draw, (x, y), short(draw, label, label_font, width), "tokens_label", fill=colors["muted"], font=label_font)
-    _text(draw, (x, y + 19), main, "tokens_total", fill=colors["text"], font=main_font)
-    main_bottom = y + 19 + main_font.size + 4
-    input_width = min(width, draw.textlength(clean(input_text), font=detail_font) + draw.textlength(" ", font=detail_font))
-    _text(draw, (x, main_bottom), short(draw, input_text, detail_font, input_width), "tokens_input",
-          fill=colors["muted"], font=detail_font)
-    _text(draw, (x + input_width, main_bottom), short(draw, output_text, detail_font, width - input_width),
-          "tokens_output", fill=colors["muted"], font=detail_font)
-    _text(draw, (x, main_bottom + 20), short(draw, tail, tail_font, width), "tokens_cached",
-          fill=colors["subtle"], font=tail_font)
-
-
 def _draw_footer_windows(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, width: int,
-                         design: dict, metrics: dict) -> None:
+                         design: dict, metrics: dict, compact: bool = False, tight: bool = False,
+                         reset_gap: int | None = None) -> None:
     colors, scale = design["colors"], design["font_scale"]
 
     subscription = metrics["subscription"]
     windows = [(subscription.get("five_hour") or {}, "5小时"), (subscription.get("weekly") or {}, "周额度")]
     col_width = (width - 14) // 2
-    label_font, value_font, reset_font = font(20, scale=scale), font(25, True, True, scale), font(18, scale=scale)
+    label_font, value_font, reset_font = (
+        (font(14, scale=scale), font(16, True, True, scale), font(13, scale=scale))
+        if tight else
+        (font(16, scale=scale), font(20, True, True, scale), font(14, scale=scale))
+        if compact else
+        (font(20, scale=scale), font(25, True, True, scale), font(18, scale=scale))
+    )
+    reset_y = reset_gap if reset_gap is not None else 12 if tight else 19 if compact else 31
     for index, (window, title) in enumerate(windows):
         start_x = x + index * (col_width + 14)
         percent = _window_percent(window)
@@ -567,193 +560,157 @@ def _draw_footer_windows(draw: ImageDraw.ImageDraw, data: dict, x: int, y: int, 
         _text(draw, (start_x + col_width - draw.textlength(text_value, font=value_font), y - 2), text_value,
               value_id, fill=colors.get(metrics["provider"], colors["text"]), font=value_font)
         reset = "订阅无限额" if window.get("unlimited") else _window_reset(window)
-        _text(draw, (start_x, y + 31), short(draw, reset, reset_font, col_width), reset_id,
+        _text(draw, (start_x, y + reset_y), short(draw, reset, reset_font, col_width), reset_id,
               fill=colors["subtle"], font=reset_font)
+
+
+def _draw_agent_layout(image: Image.Image | None, draw: ImageDraw.ImageDraw, data: dict,
+                      x: int, y: int, width: int, height: int, design: dict,
+                      animation_time: float | None, now: datetime) -> None:
+    colors, scale = design["colors"], design["font_scale"]
+    provider = data.get("provider", "")
+    layout = design["layout"]
+    _card(draw, x, y, width, height, design, provider)
+    left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time, height)
+    metrics = _agent_metrics(data, now.date().isoformat())
+
+    count = str(metrics["count"]) if isinstance(metrics["count"], int) else "0"
+    count_font = font(54, True, True, scale)
+    task_label = "ACTIVE TASKS  ·  进行中任务" if layout == "paper" else "正在进行中的任务"
+    _text(draw, (left, y + 83), task_label, "task_label",
+          fill=colors["muted"], font=font(17 if layout == "paper" else 20, scale=scale))
+    _text(draw, (left, y + 107), count, "task_count", fill=colors["text"], font=count_font)
+    _text(draw, (left + draw.textlength(count, font=count_font) + 14, y + 135), "个任务", "task_unit",
+          fill=colors["muted"], font=font(19, scale=scale))
+
+    subscription = metrics["subscription"]
+    plan_width = right - left
+    prefix = "订阅套餐 "
+    plan_label_font, plan_font = font(18, scale=scale), font(22, True, scale=scale)
+    plan_y = y + 165
+    prefix_width = draw.textlength(prefix, font=plan_label_font)
+    _text(draw, (left, plan_y), prefix, "plan_label", fill=colors["muted"], font=plan_label_font)
+    _text(draw, (left + prefix_width, plan_y),
+          short(draw, subscription.get("plan_name") or "套餐待填写", plan_font, plan_width - prefix_width),
+          "plan_name", fill=colors["text"] if subscription.get("plan_name") else colors["subtle"],
+          font=plan_font)
+    detail_font = font(18, scale=scale)
+    expiry = expiry_text(subscription.get("expires_at"))
+    expiry_width = draw.textlength(expiry, font=detail_font)
+    spec_width = max(0, plan_width - expiry_width - 16)
+    spec = str(subscription.get("plan_spec") or "规格待填写")
+    if layout == "aurora":
+        spec = "规格 " + str(subscription.get("plan_spec") or "待填写")
+    _text(draw, (left, y + 195), short(draw, spec, detail_font, spec_width), "plan_spec",
+          fill=colors["muted"], font=detail_font)
+    _text(draw, (right - expiry_width, y + 195), expiry, "plan_expiry",
+          fill=colors["subtle"], font=detail_font)
+
+    if height < 350:
+        # Keep the hero readable while compacting only the quota and usage rows.
+        compact_design = {**design, "font_scale": min(scale, 90)}
+        body_font_scale = compact_design["font_scale"]
+        footer_y = y + height - 27
+        token_y = y + 250
+        _draw_progress(draw, left, right, y + 218, data, compact_design, metrics,
+                       compact=True, density=0.8, show_reset=layout == "aurora")
+        if layout == "aurora":
+            _shape(draw, "rounded_rectangle", (x + 16, token_y - 4, x + width - 16, footer_y - 4),
+                   "tokens_panel", radius=max(12, design["radius"] - 5), fill=colors["surface_alt"],
+                   outline=_mix_color(colors["edge"], colors["codex"], 0.24), width=1)
+        elif layout == "paper":
+            _shape(draw, "line", (left, y + 248, right, y + 248), "tokens_rule", fill=colors["edge"], width=1)
+
+        tokens = metrics["tokens"] or {}
+        label_font, total_font, detail_font = (
+            font(14, scale=body_font_scale), font(24, True, True, body_font_scale),
+            font(12, scale=body_font_scale))
+        details_x = left + 218
+        detail_width = right - details_x
+        detail_items = [
+            ("tokens_input", f"入 {number(tokens.get('input'))}"),
+            ("tokens_output", f"出 {number(tokens.get('output'))}"),
+            ("tokens_cached", f"缓存 {number(tokens.get('cached'))}"),
+        ]
+        measured_widths = [draw.textlength(value, font=detail_font) for _, value in detail_items]
+        gaps = 6
+        line_width = max(0, detail_width - gaps * (len(detail_items) - 1))
+        factor = min(1.0, line_width / max(1.0, sum(measured_widths)))
+        widths = [max(1, math.ceil(value * factor)) for value in measured_widths]
+        widths[-1] = max(1, detail_width - gaps * (len(detail_items) - 1) - sum(widths[:-1]))
+        _text(draw, (left, token_y), short(draw, metrics["date_label"], label_font, 105), "tokens_label",
+              fill=colors["muted"], font=label_font)
+        _text(draw, (left + 106, token_y - 3), number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None),
+              "tokens_total", fill=colors["text"], font=total_font)
+        detail_x = details_x
+        for index, ((identity, value), item_width) in enumerate(zip(detail_items, widths)):
+            tint = colors["subtle"] if identity == "tokens_cached" else colors["muted"]
+            _text(draw, (detail_x, token_y), short(draw, value, detail_font, item_width), identity,
+                  fill=tint, font=detail_font)
+            detail_x += item_width + (gaps if index < len(detail_items) - 1 else 0)
+        if layout == "classic":
+            _shape(draw, "line", (left, footer_y - 2, right, footer_y - 2), "quota_rule",
+                   fill=colors["edge"], width=1)
+        _draw_footer_windows(draw, data, left, footer_y, right - left, compact_design, metrics, tight=True)
+    else:
+        _draw_progress(draw, left, right, y + 218, data, design, metrics,
+                       compact=True, show_reset=layout == "aurora")
+        footer_y = y + 318
+        token_y = y + 259
+        if layout == "aurora":
+            _shape(draw, "rounded_rectangle", (x + 16, token_y - 7, x + width - 16, footer_y - 2),
+                   "tokens_panel", radius=max(12, design["radius"] - 5), fill=colors["surface_alt"],
+                   outline=_mix_color(colors["edge"], colors["codex"], 0.24), width=1)
+        elif layout == "paper":
+            _shape(draw, "line", (left, y + 254, right, y + 254), "tokens_rule", fill=colors["edge"], width=1)
+        elif layout == "classic":
+            _shape(draw, "line", (left, footer_y - 3, right, footer_y - 3), "quota_rule",
+                   fill=colors["edge"], width=1)
+
+        tokens = metrics["tokens"] or {}
+        token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
+        _text(draw, (left, token_y), short(draw, metrics["date_label"], font(15, scale=scale), 185),
+              "tokens_label", fill=colors["muted"], font=font(15, scale=scale))
+        _text(draw, (left, token_y + 21), token_value, "tokens_total", fill=colors["text"],
+              font=font(34, True, True, scale))
+        details_x = left + 205
+        detail_width = right - details_x
+        input_text = f"入 {number(tokens.get('input'))} / "
+        output_text = f"出 {number(tokens.get('output'))}"
+        detail_font = font(16, scale=scale)
+        input_width = min(detail_width, draw.textlength(input_text, font=detail_font) +
+                          draw.textlength(" ", font=detail_font))
+        _text(draw, (details_x, token_y + 17), short(draw, input_text, detail_font, input_width),
+              "tokens_input", fill=colors["muted"], font=detail_font)
+        _text(draw, (details_x + input_width, token_y + 17),
+              short(draw, output_text, detail_font, detail_width - input_width),
+              "tokens_output", fill=colors["muted"], font=detail_font)
+        cached = f"缓存 {number(tokens.get('cached'))}"
+        _text(draw, (details_x, token_y + 39), short(draw, cached, font(12, scale=scale), detail_width),
+              "tokens_cached", fill=colors["subtle"], font=font(12, scale=scale))
+        _draw_footer_windows(draw, data, left, footer_y, right - left, design, metrics, reset_gap=27)
+
+    stale = bool(data.get("stale"))
+    _text(draw, (left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新" if stale else "",
+          "stale_note", fill=colors["subtle"], font=font(14, scale=scale), visible=stale)
 
 
 def _draw_agent_classic(image: Image.Image | None, draw: ImageDraw.ImageDraw, data: dict,
                         x: int, y: int, width: int, height: int, design: dict,
                         animation_time: float | None, now: datetime) -> None:
-    colors, scale = design["colors"], design["font_scale"]
-    provider = data.get("provider", "")
-    accent = colors.get(provider, colors["subtle"])
-    _card(draw, x, y, width, height, design, provider)
-    left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
-    metrics = _agent_metrics(data, now.date().isoformat())
-    small, large = font(20, scale=scale), font(56, True, True, scale)
-    label = "正在进行中的任务"
-    count = str(metrics["count"]) if isinstance(metrics["count"], int) else "0"
-    _text(draw, (left, y + 75), label, "task_label", fill=colors["muted"], font=small)
-    _text(draw, (left, y + 101), count, "task_count", fill=colors["text"], font=large)
-    count_width = draw.textlength(count, font=large)
-    _text(draw, (left + count_width + 16, y + 131), "个任务", "task_unit",
-          fill=colors["muted"], font=font(21, scale=scale))
-    metadata_x = left + 215
-    _draw_plan(draw, data, metadata_x, y + 72, right - metadata_x, design, compact=True)
-    _draw_progress(draw, left, right, y + 179, data, design, metrics)
-
-    token_y = y + 230
-    _text(draw, (left, token_y), short(draw, metrics["date_label"], font(16, scale=scale), 190),
-          "tokens_label", fill=colors["muted"], font=font(16, scale=scale))
-    token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-    _text(draw, (left, token_y + 20), token_value, "tokens_total", fill=colors["text"],
-          font=font(38, True, True, scale))
-    input_text = f"入 {number((metrics['tokens'] or {}).get('input'))} / "
-    output_text = f"出 {number((metrics['tokens'] or {}).get('output'))}"
-    detail_font = font(17, scale=scale)
-    detail_x, detail_y = left + 205, token_y + 10
-    detail_width = right - left - 210
-    input_width = min(detail_width, draw.textlength(clean(input_text), font=detail_font) +
-                      draw.textlength(" ", font=detail_font))
-    cached = f"缓存 {number((metrics['tokens'] or {}).get('cached'))}"
-    _text(draw, (detail_x, detail_y), short(draw, input_text, detail_font, input_width),
-          "tokens_input", fill=colors["muted"], font=detail_font)
-    _text(draw, (detail_x + input_width, detail_y), short(draw, output_text, detail_font, detail_width - input_width),
-          "tokens_output", fill=colors["muted"], font=detail_font)
-    _text(draw, (left + 205, token_y + 39), short(draw, cached, font(15, scale=scale), right - left - 210),
-          "tokens_cached", fill=colors["subtle"], font=font(15, scale=scale))
-    _shape(draw, "line", (left, y + 293, right, y + 293), "quota_rule", fill=colors["edge"], width=1)
-    _draw_footer_windows(draw, data, left, y + 301, right - left, design, metrics)
-    stale = bool(data.get("stale"))
-    _text(draw, (left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新" if stale else "",
-          "stale_note", fill=colors["subtle"], font=font(14, scale=scale), visible=stale)
+    _draw_agent_layout(image, draw, data, x, y, width, height, design, animation_time, now)
 
 
 def _draw_agent_aurora(image: Image.Image | None, draw: ImageDraw.ImageDraw, data: dict,
                        x: int, y: int, width: int, height: int, design: dict,
                        animation_time: float | None, now: datetime) -> None:
-    colors, scale = design["colors"], design["font_scale"]
-    provider = data.get("provider", "")
-    _card(draw, x, y, width, height, design, provider)
-    left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
-    metrics = _agent_metrics(data, now.date().isoformat())
-    count = str(metrics["count"]) if isinstance(metrics["count"], int) else "0"
-    label = "正在进行中的任务"
-    count_font = font(54, True, True, scale)
-    _text(draw, (left, y + 75), label, "task_label", fill=colors["muted"], font=font(18, scale=scale))
-    _text(draw, (left, y + 99), count, "task_count", fill=colors["text"], font=count_font)
-    _text(draw, (left + draw.textlength(count, font=count_font) + 14, y + 128), "个任务", "task_unit",
-          fill=colors["muted"], font=font(19, scale=scale))
-
-    quota_left = x + width // 2 + 5
-    _draw_progress(draw, quota_left, right, y + 85, data, design, metrics, compact=True)
-    weekly = metrics["primary"]
-    _text(draw, (quota_left, y + 123), short(draw, _window_reset(weekly), font(18, scale=scale), right - quota_left),
-          "weekly_bar_reset", fill=colors["subtle"], font=font(18, scale=scale))
-
-    plan_x = left
-    plan_y = y + 157
-    plan_width = right - left
-    subscription = metrics["subscription"]
-    line_font = font(18, scale=scale)
-    plan_prefix = "订阅套餐 "
-    plan_label_width = draw.textlength(plan_prefix, font=line_font)
-    displayed_name = short(draw, subscription.get("plan_name") or "套餐待填写", line_font,
-                           max(0, plan_width - plan_label_width))
-    _text(draw, (left, plan_y), plan_prefix, "plan_label", fill=colors["subtle"], font=line_font)
-    _text(draw, (left + plan_label_width, plan_y), displayed_name, "plan_name",
-          fill=colors["subtle"], font=line_font)
-    detail_font = font(18, scale=scale)
-    expiry = expiry_text(subscription.get("expires_at"))
-    expiry_width = draw.textlength(expiry, font=detail_font)
-    spec_width = max(0, plan_width - expiry_width - 16)
-    _text(draw, (left, plan_y + 24), short(draw, "规格 " + (subscription.get("plan_spec") or "待填写"),
-                                          detail_font, spec_width), "plan_spec",
-          fill=colors["muted"], font=detail_font)
-    _text(draw, (right - expiry_width, plan_y + 24), expiry, "plan_expiry", fill=colors["subtle"], font=detail_font)
-
-    band_y = y + 211
-    band_bottom = y + height - 14
-    _shape(draw, "rounded_rectangle", (x + 16, band_y, x + width - 16, band_bottom), "tokens_panel",
-           radius=max(12, design["radius"] - 5), fill=colors["surface_alt"],
-           outline=_mix_color(colors["edge"], colors["codex"], 0.24), width=1)
-    tokens = metrics["tokens"] or {}
-    token_total = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-    _text(draw, (left + 10, band_y + 12), short(draw, metrics["date_label"], font(15, scale=scale), 190),
-          "tokens_label", fill=colors["muted"], font=font(15, scale=scale))
-    _text(draw, (left + 10, band_y + 30), token_total, "tokens_total", fill=colors["text"],
-          font=font(34, True, True, scale))
-    input_text = f"入 {number(tokens.get('input'))} / "
-    output_text = f"出 {number(tokens.get('output'))}"
-    detail_font = font(16, scale=scale)
-    detail_x = left + 198
-    detail_width = right - detail_x - 8
-    input_width = min(detail_width, draw.textlength(clean(input_text), font=detail_font) +
-                      draw.textlength(" ", font=detail_font))
-    cached = f"缓存 {number(tokens.get('cached'))}"
-    _text(draw, (detail_x, band_y + 28), short(draw, input_text, detail_font, input_width),
-          "tokens_input", fill=colors["muted"], font=detail_font)
-    _text(draw, (detail_x + input_width, band_y + 28), short(draw, output_text, detail_font, detail_width - input_width),
-          "tokens_output", fill=colors["muted"], font=detail_font)
-    _text(draw, (detail_x, band_y + 54), short(draw, cached, font(14, scale=scale), right - detail_x - 8),
-          "tokens_cached", fill=colors["subtle"], font=font(14, scale=scale))
-    _draw_footer_windows(draw, data, left + 8, band_y + 82, right - left - 16, design, metrics)
-    stale = bool(data.get("stale"))
-    _text(draw, (left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新" if stale else "",
-          "stale_note", fill=colors["subtle"], font=font(14, scale=scale), visible=stale)
+    _draw_agent_layout(image, draw, data, x, y, width, height, design, animation_time, now)
 
 
 def _draw_agent_paper(image: Image.Image | None, draw: ImageDraw.ImageDraw, data: dict,
                       x: int, y: int, width: int, height: int, design: dict,
                       animation_time: float | None, now: datetime) -> None:
-    colors, scale = design["colors"], design["font_scale"]
-    provider = data.get("provider", "")
-    _card(draw, x, y, width, height, design, provider)
-    left, right = _draw_agent_header(image, draw, data, x, y, width, design, animation_time)
-    metrics = _agent_metrics(data, now.date().isoformat())
-    label = "ACTIVE TASKS  ·  进行中任务"
-    count = str(metrics["count"]) if isinstance(metrics["count"], int) else "0"
-    count_font = font(54, True, True, scale)
-    _text(draw, (left, y + 72), label, "task_label", fill=colors["muted"], font=font(17, scale=scale))
-    _text(draw, (left, y + 92), count, "task_count", fill=colors["text"], font=count_font)
-    _text(draw, (left + draw.textlength(count, font=count_font) + 13, y + 119), "个任务", "task_unit",
-          fill=colors["muted"], font=font(17, scale=scale))
-
-    plan_x = x + width // 2 + 7
-    _draw_plan(draw, data, plan_x, y + 66, right - plan_x, design, compact=True)
-    _shape(draw, "line", (left, y + 166, right, y + 166), "quota_rule", fill=colors["edge"], width=1)
-
-    quota = metrics["primary"]
-    title = "周额度剩余"
-    percent = _window_percent(quota)
-    pct_text = "—" if percent is None else f"{percent:g}%"
-    _text(draw, (left, y + 175), short(draw, title, font(18, scale=scale), width - 140), "weekly_label",
-          fill=colors["muted"], font=font(18, scale=scale))
-    pct_font = font(23, True, True, scale)
-    _text(draw, (right - draw.textlength(pct_text, font=pct_font), y + 171), pct_text, "weekly_percent",
-          fill=colors.get(provider, colors["text"]), font=pct_font)
-    bar_y = y + 202
-    _shape(draw, "rectangle", (left, bar_y, right, bar_y + 6), "weekly_bar", fill=colors["surface_alt"])
-    if percent is not None and percent > 0:
-        _shape(draw, "rectangle", (left, bar_y, left + max(5, round((right - left) * percent / 100)), bar_y + 6),
-               "weekly_bar", fill=colors.get(provider, colors["working"]))
-
-    tokens = metrics["tokens"] or {}
-    token_value = number(metrics["token_value"] if isinstance(metrics["token_value"], int) else None)
-    _shape(draw, "line", (left, y + 219, right, y + 219), "tokens_rule", fill=colors["edge"], width=1)
-    _text(draw, (left, y + 228), short(draw, metrics["date_label"], font(15, scale=scale), 185),
-          "tokens_label", fill=colors["muted"], font=font(15, scale=scale))
-    _text(draw, (left, y + 248), token_value, "tokens_total", fill=colors["text"],
-          font=font(34, True, True, scale))
-    detail_x = left + 200
-    input_text = f"输入 {number(tokens.get('input'))}  ·  "
-    output_text = f"输出 {number(tokens.get('output'))}"
-    detail_font = font(15, scale=scale)
-    detail_width = right - detail_x
-    input_width = min(detail_width, draw.textlength(clean(input_text), font=detail_font) +
-                      draw.textlength(" ", font=detail_font))
-    cache_detail = f"缓存 {number(tokens.get('cached'))}"
-    _text(draw, (detail_x, y + 243), short(draw, input_text, detail_font, input_width),
-          "tokens_input", fill=colors["muted"], font=detail_font)
-    _text(draw, (detail_x + input_width, y + 243), short(draw, output_text, detail_font, detail_width - input_width),
-          "tokens_output", fill=colors["muted"], font=detail_font)
-    _text(draw, (detail_x, y + 269), short(draw, cache_detail, font(14, scale=scale), right - detail_x),
-          "tokens_cached", fill=colors["subtle"], font=font(14, scale=scale))
-    _shape(draw, "line", (left, y + 299, right, y + 299), "quota_rule", fill=colors["edge"], width=1)
-    _draw_footer_windows(draw, data, left, y + 307, right - left, design, metrics)
-    stale = bool(data.get("stale"))
-    _text(draw, (left, min(y + height + 3, SIZE[1] - 22)), "数据待检查更新" if stale else "",
-          "stale_note", fill=colors["subtle"], font=font(14, scale=scale), visible=stale)
+    _draw_agent_layout(image, draw, data, x, y, width, height, design, animation_time, now)
 
 
 def draw_agent(draw: ImageDraw.ImageDraw, data: dict, x: int, width: int, profile: dict | None = None,

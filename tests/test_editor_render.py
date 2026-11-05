@@ -126,7 +126,7 @@ class EditorRenderTests(unittest.TestCase):
     def test_legacy_status_offsets_move_mascot_badge_and_caption(self):
         snapshot = scene_snapshot()
 
-        def fake_frame(provider, state, elapsed, size=64):
+        def fake_frame(provider, state, elapsed, size=144):
             return Image.new("RGBA", (size, size), (30, 120, 200, 255))
 
         with patch("agent_dashboard.render.has_mascot", return_value=True), \
@@ -152,7 +152,7 @@ class EditorRenderTests(unittest.TestCase):
                               before_box[2] + dx, before_box[3] + dy])
         self.assertEqual(base["agent.zcode.status_indicator"]["kind"], "shape")
         self.assertEqual(moved["agent.zcode.status_indicator"]["bbox"][2] -
-                         moved["agent.zcode.status_indicator"]["bbox"][0], 64)
+                         moved["agent.zcode.status_indicator"]["bbox"][0], 144)
 
 
 if __name__ == "__main__":

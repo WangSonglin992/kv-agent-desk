@@ -23,6 +23,6 @@ Retrieved on 2026-10-15. No logo artwork was redrawn, reshaped, or recolored.
 
 Created on 2026-11-05 with the built-in OpenAI image generator, using a user-supplied character illustration as visual reference. These are community-style fan illustrations, not official provider mascots. The original reference illustration is not included in this repository or the application.
 
-Each PNG contains a 4-column by 3-row atlas: idle, working and busy, four frames per state. The generated artwork was mechanically resized to a 512 x 384 RGBA atlas for offline rendering; transparency and cell alignment were preserved. Prompt directions and runtime behavior are recorded in [MASCOT-ANIMATIONS.md](../../docs/MASCOT-ANIMATIONS.md).
+Each PNG contains a 4-column by 3-row atlas: idle, working and busy, four frames per state. In v0.8.1 the original generated artwork was mechanically resized to a 768 x 576 RGBA atlas (192 pixels per frame) for sharper large portraits; transparency and cell alignment were preserved. Prompt directions and runtime behavior are recorded in [MASCOT-ANIMATIONS.md](../../docs/MASCOT-ANIMATIONS.md).
 
 The three generated sprite atlases are supplied under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), attributed to KV Agent Desk contributors. This artwork license does not grant rights to underlying third-party character designs or provider trademarks, which remain with their respective owners. The application's source code retains its MIT license.

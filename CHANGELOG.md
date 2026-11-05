@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Enlarge the Agent characters from 64 to 144 pixels and reserve a dedicated portrait area.
+- Reflow the status, task summary, subscription details, Token totals and quota reset dates to keep the three themes readable.
+- Repack the original artwork at 192 pixels per frame for sharper large portraits, preserving existing profile IDs and saved appearance records.
+
 ## 0.8.0
 
 - Replace the three Agent status spinners with local animated chibi mascots, with separate idle, working and busy frame sequences.
