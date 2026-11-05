@@ -10,7 +10,13 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont
 
-from .ui_elements import ELEMENT_DEFINITIONS
+from .ui_elements import (
+    ELEMENT_DEFINITIONS,
+    MASCOT_ELEMENT_IDS,
+    MASCOT_DEFAULT_SCALE_PERCENT,
+    MASCOT_MAX_SCALE_PERCENT,
+    MASCOT_MIN_SCALE_PERCENT,
+)
 
 
 class FittedText(str):
@@ -205,13 +211,31 @@ class SceneCanvas:
     def line(self, xy, **kwargs):
         return self._shape("line", xy, **kwargs)
 
-    def paste(self, image, xy, mask=None, *, element=None):
+    def paste(self, image, xy, mask=None, *, element=None, default_size=None,
+              resize_mode=None, scale_percent=None):
         if element is not None:
             with self.element(element):
-                return self.paste(image, xy, mask)
+                return self.paste(image, xy, mask, default_size=default_size,
+                                  resize_mode=resize_mode, scale_percent=scale_percent)
         dx, dy = self._offset()
         bounds = (xy[0], xy[1], xy[0] + image.width, xy[1] + image.height)
-        self._record(bounds, (bounds[0] + dx, bounds[1] + dy, bounds[2] + dx, bounds[3] + dy))
+        default_width, default_height = default_size or image.size
+        default_bounds = (xy[0], xy[1], xy[0] + default_width, xy[1] + default_height)
+        self._record(default_bounds, (bounds[0] + dx, bounds[1] + dy, bounds[2] + dx, bounds[3] + dy))
+        identity = self._active[-1] if self._active else ""
+        if identity in MASCOT_ELEMENT_IDS and identity in self._nodes:
+            effective_scale = scale_percent
+            if type(effective_scale) is not int or not MASCOT_MIN_SCALE_PERCENT <= effective_scale <= MASCOT_MAX_SCALE_PERCENT:
+                effective_scale = MASCOT_DEFAULT_SCALE_PERCENT
+            self._nodes[identity].update(
+                resize_mode=resize_mode or "uniform",
+                scale_percent=effective_scale,
+                default_scale_percent=MASCOT_DEFAULT_SCALE_PERCENT,
+                min_scale_percent=MASCOT_MIN_SCALE_PERCENT,
+                max_scale_percent=MASCOT_MAX_SCALE_PERCENT,
+                base_width=int(default_width),
+                base_height=int(default_height),
+            )
         self.image.paste(image, (round(xy[0] + dx), round(xy[1] + dy)), mask)
 
     def manifest(self):

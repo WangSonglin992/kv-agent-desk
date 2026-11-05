@@ -18,6 +18,7 @@ ROOT_FILES = {
 ASSETS = {"app.ico", "deepseek.png", "deepseek.ico", "deepseek.svg", "chatgpt.png", "glm.png", "google.png", "mascot_chatgpt.png", "mascot_glm.png", "mascot_gemini.png", "SOURCES.md"}
 BINARY_FILES = {"agent_dashboard/assets/" + name for name in ASSETS if name.endswith((".ico", ".png"))}
 BINARY_FILES.add("docs/images/dashboard-demo.png")
+BINARY_FILES.add("docs/images/mascot-resize-editor.png")
 PATTERNS = {
     "API key": re.compile(rb"\bsk-[A-Za-z0-9_-]{20,}"),
     "GLM credential": re.compile(rb"\b[0-9a-fA-F]{32}\.[A-Za-z0-9]{16,}\b"),

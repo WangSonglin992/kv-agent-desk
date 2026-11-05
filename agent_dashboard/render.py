@@ -13,7 +13,13 @@ import re
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .mascots import has_mascot, mascot_frame
-from .ui_elements import ELEMENT_DEFINITIONS
+from .ui_elements import (
+    ELEMENT_DEFINITIONS,
+    MASCOT_ELEMENT_IDS,
+    MASCOT_DEFAULT_SCALE_PERCENT,
+    MASCOT_MAX_SCALE_PERCENT,
+    MASCOT_MIN_SCALE_PERCENT,
+)
 from .ui_scene import FittedText, SceneCanvas
 
 
@@ -190,10 +196,15 @@ def _shape(draw: ImageDraw.ImageDraw | SceneCanvas, primitive: str, xy, element:
 
 
 def _paste(image: Image.Image, draw: ImageDraw.ImageDraw | SceneCanvas, icon: Image.Image,
-           xy: tuple[int, int], element: str, mask: Image.Image | None = None) -> None:
+           xy: tuple[int, int], element: str, mask: Image.Image | None = None, *,
+           default_size: tuple[int, int] | None = None, scale_percent: int | None = None) -> None:
     identity = _element(draw, element)
     if identity is not None:
-        draw.paste(icon, xy, mask, element=identity)
+        if identity in MASCOT_ELEMENT_IDS:
+            draw.paste(icon, xy, mask, element=identity, default_size=default_size,
+                       resize_mode="uniform", scale_percent=scale_percent)
+        else:
+            draw.paste(icon, xy, mask, element=identity)
     else:
         image.paste(icon, xy, mask)
 
@@ -375,6 +386,18 @@ def _mascot_image(data: dict, animation_time: float | None, size: int = 144) -> 
         return None
 
 
+def _mascot_scale_percent(draw: ImageDraw.ImageDraw, provider: object) -> int:
+    if not isinstance(provider, str):
+        return MASCOT_DEFAULT_SCALE_PERCENT
+    identity = f"agent.{provider}.status_indicator"
+    if identity not in MASCOT_ELEMENT_IDS or not isinstance(draw, SceneCanvas):
+        return MASCOT_DEFAULT_SCALE_PERCENT
+    value = draw.overrides.get(identity, {}).get("scale_percent", MASCOT_DEFAULT_SCALE_PERCENT)
+    if type(value) is int and MASCOT_MIN_SCALE_PERCENT <= value <= MASCOT_MAX_SCALE_PERCENT:
+        return value
+    return MASCOT_DEFAULT_SCALE_PERCENT
+
+
 def _card(draw: ImageDraw.ImageDraw, x: int, y: int, width: int, height: int,
           design: dict, provider: str = "", account: bool = False) -> None:
     colors, layout = design["colors"], design["layout"]
@@ -425,8 +448,14 @@ def _draw_agent_header(image: Image.Image | None, draw: ImageDraw.ImageDraw, dat
     mascot_x = right - mascot_size
     mascot = _mascot_image(data, animation_time, mascot_size) if image is not None else None
     if mascot is not None and image is not None:
+        scale_percent = _mascot_scale_percent(draw, provider)
+        base_size = mascot.size
+        if scale_percent != MASCOT_DEFAULT_SCALE_PERCENT:
+            scaled_size = min(512, max(1, math.floor(mascot_size * scale_percent / 100 + 0.5)))
+            mascot = mascot.resize((scaled_size, scaled_size), Image.Resampling.LANCZOS)
         mascot_y = y + 7
-        _paste(image, draw, mascot, (mascot_x, mascot_y), "status_indicator", mascot.getchannel("A"))
+        _paste(image, draw, mascot, (mascot_x, mascot_y), "status_indicator", mascot.getchannel("A"),
+               default_size=base_size, scale_percent=scale_percent)
         chip_left = left
         _shape(draw, "rounded_rectangle", (chip_left, y + 54, chip_left + chip_width, y + 80), "status_badge", radius=13,
                fill=_mix_color(colors["surface"], state_color, 0.12))

@@ -276,6 +276,24 @@ class WebTests(unittest.TestCase):
             urllib.request.urlopen(request, timeout=2)
         self.assertEqual(caught.exception.code, 400)
 
+    def test_mascot_scale_preview_is_data_only_and_does_not_save(self):
+        profile = self.dashboard.ui_profiles.get("classic")
+        profile["elements"] = {"agent.codex.status_indicator": {"scale_percent": 150, "dx": 4}}
+        with patch.object(self.dashboard, "collect", side_effect=AssertionError("must not collect")), \
+                patch.object(self.dashboard, "send", side_effect=AssertionError("must not send USB")), \
+                patch.object(self.dashboard.settings, "update", side_effect=AssertionError("must not save")):
+            with self.post("/api/ui/editor/preview", {"profile": profile}, self.dashboard.token) as response:
+                result = json.load(response)
+        node = next(item for item in result["scene"] if item["id"] == "agent.codex.status_indicator")
+        self.assertEqual(node["resize_mode"], "uniform")
+        self.assertEqual(node["scale_percent"], 150)
+        self.assertEqual(node["default_scale_percent"], 100)
+        self.assertEqual((node["min_scale_percent"], node["max_scale_percent"]), (25, 300))
+        self.assertEqual(node["base_width"], node["base_height"])
+        self.assertEqual(node["bbox"][2] - node["bbox"][0], node["base_width"] * 3 // 2)
+        self.assertEqual(result["profile"]["elements"]["agent.codex.status_indicator"]["scale_percent"], 150)
+        self.assertFalse((Path(self.folder.name) / "ui-profiles").exists())
+
     def test_custom_ui_import_export_and_restart_never_include_account_data(self):
         profile = self.dashboard.ui_profiles.export("paper")
         profile.update(id="custom_paper", name="Synthetic custom")
@@ -312,6 +330,38 @@ class WebTests(unittest.TestCase):
                 self.assertEqual(response.headers["Content-Type"], "image/png")
         with self.assertRaises(urllib.error.HTTPError):
             urllib.request.urlopen(self.url + "/assets/../settings.py")
+
+
+class SafeEditorScaleTests(unittest.TestCase):
+    def test_only_valid_mascot_resize_metadata_is_exposed(self):
+        valid = {
+            "id": "agent.codex.status_indicator", "bbox": [10, 20, 226, 236],
+            "default_bbox": [10, 20, 154, 164], "resize_mode": "uniform",
+            "scale_percent": 150, "default_scale_percent": 100,
+            "min_scale_percent": 25, "max_scale_percent": 300,
+            "base_width": 144, "base_height": 144,
+            "text": "private synthetic sentinel", "url": "https://example.invalid/secret",
+        }
+        safe = Dashboard._safe_editor_scene([valid])[0]
+        self.assertEqual(safe["resize_mode"], "uniform")
+        self.assertEqual(safe["scale_percent"], 150)
+        self.assertNotIn("text", safe)
+        self.assertNotIn("url", safe)
+        for invalid in (
+            {**valid, "id": "agent.codex.logo"},
+            {**valid, "scale_percent": True},
+            {**valid, "scale_percent": 301},
+            {**valid, "scale_percent": 150.5},
+            {**valid, "default_scale_percent": 99},
+            {**valid, "min_scale_percent": 0},
+            {**valid, "max_scale_percent": 100000},
+            {**valid, "base_width": 0},
+            {**valid, "base_height": 100},
+        ):
+            with self.subTest(invalid=invalid):
+                result = Dashboard._safe_editor_scene([invalid])[0]
+                self.assertNotIn("resize_mode", result)
+                self.assertNotIn("scale_percent", result)
 
 
 if __name__ == "__main__":

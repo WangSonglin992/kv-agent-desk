@@ -154,6 +154,104 @@ class EditorRenderTests(unittest.TestCase):
         self.assertEqual(moved["agent.zcode.status_indicator"]["bbox"][2] -
                          moved["agent.zcode.status_indicator"]["bbox"][0], 144)
 
+    def test_mascot_scaling_is_uniform_and_keeps_base_layout_and_default_bounds(self):
+        snapshot = scene_snapshot()
+
+        def fake_frame(provider, state, elapsed, size=144):
+            return Image.new("RGBA", (size, size), (30, 120, 200, 255))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            for layout in ("classic", "aurora", "paper"):
+                with self.subTest(layout=layout):
+                    _, base_manifest = render_scene(
+                        snapshot, NOW, {"id": layout, "layout": layout}, animation_time=0)
+                    profile = {"id": f"mascot-scale-{layout}", "layout": layout, "elements": {
+                        "agent.codex": {"dx": 3, "dy": -5},
+                        **{identity: {"scale_percent": 300} for identity in (
+                            "agent.codex.status_indicator", "agent.zcode.status_indicator",
+                            "agent.antigravity.status_indicator")},
+                        "agent.codex.status_indicator": {"dx": 8, "dy": 2, "scale_percent": 300},
+                    }}
+                    _, scaled_manifest = render_scene(snapshot, NOW, profile, animation_time=0)
+
+                    base = {node["id"]: node for node in base_manifest}
+                    scaled = {node["id"]: node for node in scaled_manifest}
+                    for provider in ("codex", "zcode", "antigravity"):
+                        identity = f"agent.{provider}.status_indicator"
+                        node = scaled[identity]
+                        original = base[identity]
+                        self.assertEqual(node["kind"], "shape")
+                        self.assertEqual(node["resize_mode"], "uniform")
+                        self.assertEqual(node["scale_percent"], 300)
+                        self.assertEqual(node["default_scale_percent"], 100)
+                        self.assertEqual(node["min_scale_percent"], 25)
+                        self.assertEqual(node["max_scale_percent"], 300)
+                        self.assertEqual((node["base_width"], node["base_height"]), (144, 144))
+                        self.assertEqual(node["default_bbox"], original["default_bbox"])
+                        dx, dy = (11, -3) if provider == "codex" else (0, 0)
+                        self.assertEqual(node["bbox"], [
+                            original["default_bbox"][0] + dx,
+                            original["default_bbox"][1] + dy,
+                            original["default_bbox"][0] + dx + 432,
+                            original["default_bbox"][1] + dy + 432,
+                        ])
+
+                    codex_name = "agent.codex.name"
+                    self.assertEqual(scaled[codex_name]["bbox"], [
+                        base[codex_name]["bbox"][0] + 3,
+                        base[codex_name]["bbox"][1] - 5,
+                        base[codex_name]["bbox"][2] + 3,
+                        base[codex_name]["bbox"][3] - 5,
+                    ])
+
+    def test_absent_and_explicit_100_mascot_scale_are_pixel_identical(self):
+        snapshot = scene_snapshot()
+
+        def fake_frame(provider, state, elapsed, size=144):
+            return Image.new("RGBA", (size, size), (30, 120, 200, 255))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=fake_frame):
+            absent = render(snapshot, NOW, {"id": "classic", "layout": "classic"}, animation_time=0)
+            explicit = render(snapshot, NOW, {"id": "explicit-scale", "layout": "classic", "elements": {
+                "agent.codex.status_indicator": {"scale_percent": 100},
+            }}, animation_time=0)
+            self.assertIsNone(ImageChops.difference(absent, explicit).getbbox())
+
+    def test_scaled_mascot_preserves_transparency_and_shape_fallback_has_no_scale_metadata(self):
+        snapshot = scene_snapshot()
+
+        def transparent_frame(provider, state, elapsed, size=144):
+            frame = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            from PIL import ImageDraw
+            ImageDraw.Draw(frame).rectangle((size // 2 - 9, size // 2 - 9,
+                                             size // 2 + 8, size // 2 + 8),
+                                            fill=(240, 60, 30, 255))
+            return frame
+
+        base_profile = {"id": "classic", "layout": "classic"}
+        scaled_profile = {"id": "alpha-scale", "layout": "classic", "elements": {
+            "agent.codex.status_indicator": {"scale_percent": 200},
+        }}
+        with patch("agent_dashboard.render.has_mascot", return_value=True), \
+                patch("agent_dashboard.render.mascot_frame", side_effect=transparent_frame):
+            base_image, _ = render_scene(snapshot, NOW, base_profile, animation_time=0)
+            scaled_image, manifest = render_scene(snapshot, NOW, scaled_profile, animation_time=0)
+
+        nodes = {node["id"]: node for node in manifest}
+        left, top = nodes["agent.codex.status_indicator"]["default_bbox"][:2]
+        self.assertEqual(nodes["agent.codex.status_indicator"]["bbox"][2] - left, 288)
+        self.assertEqual(scaled_image.getpixel((left, top)), base_image.getpixel((left, top)))
+        self.assertEqual(scaled_image.getpixel((left + 144, top + 144)), (240, 60, 30))
+
+        with patch("agent_dashboard.render.has_mascot", return_value=False):
+            _, fallback_manifest = render_scene(snapshot, NOW, scaled_profile, animation_time=0)
+        fallback = {node["id"]: node for node in fallback_manifest}["agent.codex.status_indicator"]
+        self.assertFalse({"resize_mode", "scale_percent", "default_scale_percent", "base_width", "base_height"}
+                         & set(fallback))
+        self.assertLess(fallback["bbox"][2] - fallback["bbox"][0], 25)
+
 
 if __name__ == "__main__":
     unittest.main()

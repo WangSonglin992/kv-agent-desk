@@ -38,7 +38,10 @@ from .settings import AppSettings, get_autostart, set_autostart
 from .paths import user_state_directory, legacy_state_directories
 from .web import PAGE
 from .ui_profiles import UIProfiles
-from .ui_elements import ELEMENT_DEFINITIONS
+from .ui_elements import (
+    ELEMENT_DEFINITIONS, MASCOT_ELEMENT_IDS, MASCOT_MIN_SCALE_PERCENT,
+    MASCOT_MAX_SCALE_PERCENT,
+)
 from .ui_fonts import font_catalogue, is_font_family_id
 
 APP_ID = "kv-agent-desk"
@@ -406,6 +409,24 @@ class Dashboard:
                     entry[field] = value if type(value) is bool else None
                 elif field in {"default_font_family", "font_family"}:
                     entry[field] = value if (value == "" or is_font_family_id(value)) else None
+            if element_id in MASCOT_ELEMENT_IDS and item.get("resize_mode") == "uniform":
+                percentage = item.get("scale_percent")
+                base_width, base_height = item.get("base_width"), item.get("base_height")
+                if (type(percentage) is int
+                        and MASCOT_MIN_SCALE_PERCENT <= percentage <= MASCOT_MAX_SCALE_PERCENT
+                        and type(base_width) is int and type(base_height) is int
+                        and 1 <= base_width <= 512 and base_height == base_width
+                        and item.get("default_scale_percent") == 100
+                        and type(item.get("default_scale_percent")) is int
+                        and item.get("min_scale_percent") == MASCOT_MIN_SCALE_PERCENT
+                        and type(item.get("min_scale_percent")) is int
+                        and item.get("max_scale_percent") == MASCOT_MAX_SCALE_PERCENT
+                        and type(item.get("max_scale_percent")) is int):
+                    entry.update(resize_mode="uniform", scale_percent=percentage,
+                                 default_scale_percent=100,
+                                 min_scale_percent=MASCOT_MIN_SCALE_PERCENT,
+                                 max_scale_percent=MASCOT_MAX_SCALE_PERCENT,
+                                 base_width=base_width, base_height=base_height)
             safe_scene.append(entry)
             if len(safe_scene) > len(ELEMENT_DEFINITIONS):
                 raise ValueError("too many scene elements")

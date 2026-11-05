@@ -18,7 +18,12 @@ import tempfile
 import threading
 from typing import Any
 
-from .ui_elements import ELEMENT_DEFINITIONS
+from .ui_elements import (
+    ELEMENT_DEFINITIONS,
+    MASCOT_ELEMENT_IDS,
+    MASCOT_MAX_SCALE_PERCENT,
+    MASCOT_MIN_SCALE_PERCENT,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -516,6 +521,8 @@ def _normalize_elements(elements: object) -> dict[str, dict[str, Any]]:
             raise ValueError("element override must be an object")
         kind = definition["kind"]
         allowed = {"dx", "dy", "font_size", "font_family", "color", "bold", "italic"} if kind == "text" else {"dx", "dy"}
+        if element_id in MASCOT_ELEMENT_IDS:
+            allowed.add("scale_percent")
         if set(override) - allowed:
             raise ValueError("unsupported UI element override field")
         values: dict[str, Any] = {}
@@ -533,6 +540,14 @@ def _normalize_elements(elements: object) -> dict[str, dict[str, Any]]:
             if key in {"bold", "italic"}:
                 if type(value) is not bool:
                     raise ValueError(f"elements.{element_id}.{key} must be a boolean")
+                values[key] = value
+                continue
+            if key == "scale_percent":
+                if type(value) is not int or not MASCOT_MIN_SCALE_PERCENT <= value <= MASCOT_MAX_SCALE_PERCENT:
+                    raise ValueError(
+                        f"elements.{element_id}.scale_percent must be an integer from "
+                        f"{MASCOT_MIN_SCALE_PERCENT} to {MASCOT_MAX_SCALE_PERCENT}"
+                    )
                 values[key] = value
                 continue
             if type(value) is not int:

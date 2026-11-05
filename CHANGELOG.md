@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- Add 25–300% mascot scaling to the visual layout inspector and proportional four-corner drag handles with the opposite corner fixed.
+- Save per-mascot scale with layout profiles; retain legacy 100% defaults, multi-selection percentage edits, reset and cancellation behavior.
+- Correct preview pointer coordinates under CSS zoom while preserving ordinary movement, text styling and business data.
+
 ## 0.8.1
 
 - Enlarge the Agent characters from 64 to 144 pixels and reserve a dedicated portrait area.

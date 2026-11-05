@@ -34,6 +34,12 @@ LAYOUT_EDITOR_CSS = r'''
 .layout-editor-xy{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .layout-editor-font-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
 .layout-editor-font-row button,.layout-editor-default{padding:7px 9px;font-size:11px}
+.layout-editor-scale-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
+.layout-editor-scale-row button{padding:7px 9px;font-size:11px}
+.layout-editor-control-hint{margin-top:5px;color:var(--ui-subtle);font-size:11px;line-height:1.45}
+.layout-resize-handle{fill:var(--ui-background);stroke:var(--ui-codex);stroke-width:2;vector-effect:non-scaling-stroke;pointer-events:all;touch-action:none}
+.layout-resize-handle[data-resize-corner="nw"],.layout-resize-handle[data-resize-corner="se"]{cursor:nwse-resize}
+.layout-resize-handle[data-resize-corner="ne"],.layout-resize-handle[data-resize-corner="sw"]{cursor:nesw-resize}
 .layout-editor-color-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:8px;align-items:center}
 .layout-editor-color-row input[type=color]{width:52px;height:36px;padding:3px}
 .layout-editor-color-state{color:var(--ui-subtle);font-size:11px;overflow-wrap:anywhere}
@@ -87,6 +93,16 @@ LAYOUT_EDITOR_HTML = r'''
         <label for="layout-editor-x">X（px）<input id="layout-editor-x" type="number" step="1" inputmode="numeric"></label>
         <label for="layout-editor-y">Y（px）<input id="layout-editor-y" type="number" step="1" inputmode="numeric"></label>
       </div>
+      <div>
+        <div class="layout-editor-control-title">角色缩放（%）</div>
+        <div class="layout-editor-scale-row">
+          <label for="layout-editor-scale">缩放百分比
+            <input id="layout-editor-scale" type="number" min="25" max="300" step="1" inputmode="numeric" placeholder="仅角色图形">
+          </label>
+          <button type="button" id="layout-editor-scale-default">恢复 100%</button>
+        </div>
+        <div class="layout-editor-control-hint" id="layout-editor-scale-hint">仅角色图形支持缩放</div>
+      </div>
       <label for="layout-editor-font">文字字号（8–96 px）
         <input id="layout-editor-font" type="number" min="8" max="96" step="1" inputmode="numeric" placeholder="仅文字元素">
       </label>
@@ -125,7 +141,7 @@ LAYOUT_EDITOR_HTML = r'''
       </div>
     </aside>
   </div>
-  <p class="layout-editor-help">预览只修改样式草稿，不写入屏幕或配置。X/Y 以元素边框左上角为准；字号只应用于所选文字元素，多选时会跳过图形和分组。</p>
+  <p class="layout-editor-help">预览只修改样式草稿，不写入屏幕或配置。X/Y 以元素边框左上角为准；字号只应用于所选文字元素。选中单个角色后可拖动四角等比例缩放，松开后更新预览；百分比可同时调整多个所选角色。放大后仍可拖动或输入 X/Y 调整位置。</p>
 </section>
 '''
 
@@ -142,6 +158,8 @@ LAYOUT_EDITOR_JS = r'''
   const xInput = byId('layout-editor-x');
   const yInput = byId('layout-editor-y');
   const fontInput = byId('layout-editor-font');
+  const scaleInput = byId('layout-editor-scale');
+  const scaleHint = byId('layout-editor-scale-hint');
   const fontFamilyInput = byId('layout-editor-font-family');
   const colorInput = byId('layout-editor-color');
   const colorState = byId('layout-editor-color-state');
@@ -153,6 +171,9 @@ LAYOUT_EDITOR_JS = r'''
   const ns = 'http://www.w3.org/2000/svg';
   const idPattern = /^[a-z0-9][a-z0-9_-]{0,39}$/;
   const allowedKinds = new Set(['text', 'shape', 'image', 'group']);
+  const scalableMascotIds = new Set([
+    'agent.codex.status_indicator','agent.zcode.status_indicator','agent.antigravity.status_indicator'
+  ]);
   const editor = {
     open: false, builtin: false, original: null, profile: null, scene: [],
     sceneById: new Map(), selected: new Set(), primary: null,
@@ -171,7 +192,8 @@ LAYOUT_EDITOR_JS = r'''
                       'layout-editor-save-as','layout-editor-apply','layout-editor-cancel',
                       'layout-editor-font-family','layout-editor-color','layout-editor-color-default',
                       'layout-editor-bold','layout-editor-bold-default','layout-editor-italic','layout-editor-italic-default',
-                      'layout-editor-element','layout-editor-x','layout-editor-y','layout-editor-font','layout-editor-name',
+                      'layout-editor-element','layout-editor-x','layout-editor-y','layout-editor-font','layout-editor-scale',
+                      'layout-editor-scale-default','layout-editor-name',
                       'layout-editor-align-left','layout-editor-align-center-x','layout-editor-align-right',
                       'layout-editor-align-top','layout-editor-align-center-y','layout-editor-align-bottom',
                       'layout-editor-distribute-x','layout-editor-distribute-y']) {
@@ -204,6 +226,18 @@ LAYOUT_EDITOR_JS = r'''
         bbox:item.bbox.map(Number), default_bbox:Array.isArray(item.default_bbox) &&
           item.default_bbox.length === 4 && item.default_bbox.every(Number.isFinite) ? item.default_bbox.map(Number) : item.bbox.map(Number)
       };
+      if (scalableMascotIds.has(row.id) && row.kind==='shape' && item.resize_mode==='uniform') {
+        if (Number.isInteger(item.scale_percent) && item.scale_percent>=25 && item.scale_percent<=300) row.scale_percent=item.scale_percent;
+        if (Number.isInteger(item.default_scale_percent) && item.default_scale_percent>=25 && item.default_scale_percent<=300) row.default_scale_percent=item.default_scale_percent;
+        if (Number.isInteger(item.min_scale_percent) && item.min_scale_percent===25) row.min_scale_percent=item.min_scale_percent;
+        if (Number.isInteger(item.max_scale_percent) && item.max_scale_percent===300) row.max_scale_percent=item.max_scale_percent;
+        if (Number.isInteger(item.base_width) && item.base_width>0 &&
+            Number.isInteger(item.base_height) && item.base_height>0) {
+          row.resize_mode='uniform';
+          row.base_width=item.base_width;
+          row.base_height=item.base_height;
+        }
+      }
       if (Number.isInteger(item.font_size) && item.font_size >= 8 && item.font_size <= 96) row.font_size = item.font_size;
       if (Number.isInteger(item.default_font_size) && item.default_font_size >= 8 && item.default_font_size <= 96) row.default_font_size = item.default_font_size;
       for (const key of ['color','default_color']) {
@@ -315,6 +349,44 @@ LAYOUT_EDITOR_JS = r'''
       if (editor.primary === item.id) rect.classList.add('is-primary');
       overlay.appendChild(rect);
     }
+    if (editor.selected.size===1) {
+      const selectedId=[...editor.selected][0];
+      const item=editor.sceneById.get(selectedId);
+      if (isScalableMascot(item)) {
+        const bounds=overlay.getBoundingClientRect();
+        if (bounds.width>0 && bounds.height>0) {
+          const handleWidth=12*1920/bounds.width;
+          const handleHeight=12*480/bounds.height;
+          const [left,top,right,bottom]=item.bbox;
+          const corners={nw:[left,top],ne:[right,top],sw:[left,bottom],se:[right,bottom]};
+          for (const [corner,[x,y]] of Object.entries(corners)) {
+            const handle=document.createElementNS(ns,'rect');
+            handle.setAttribute('x',String(x-handleWidth/2));
+            handle.setAttribute('y',String(y-handleHeight/2));
+            handle.setAttribute('width',String(handleWidth));
+            handle.setAttribute('height',String(handleHeight));
+            handle.setAttribute('data-element-id',item.id);
+            handle.setAttribute('data-resize-corner',corner);
+            handle.setAttribute('aria-label',item.label+' '+corner+' 等比例缩放');
+            handle.classList.add('layout-resize-handle');
+            overlay.appendChild(handle);
+          }
+        }
+      }
+    }
+  }
+  function isScalableMascot(item) {
+    return !!(item && scalableMascotIds.has(item.id) && item.kind==='shape' &&
+      item.resize_mode==='uniform' && Number.isInteger(item.scale_percent) &&
+      item.scale_percent>=25 && item.scale_percent<=300 &&
+      Number.isInteger(item.default_scale_percent) && item.default_scale_percent>=25 && item.default_scale_percent<=300 &&
+      Number.isInteger(item.min_scale_percent) && item.min_scale_percent===25 &&
+      Number.isInteger(item.max_scale_percent) && item.max_scale_percent===300 &&
+      Number.isInteger(item.base_width) && item.base_width>0 &&
+      Number.isInteger(item.base_height) && item.base_height>0);
+  }
+  function mascotTargets() {
+    return [...editor.selected].map(id=>editor.sceneById.get(id)).filter(isScalableMascot);
   }
   function effectiveStyle(item,key,defaultKey,fallback) {
     if (item[key]!==undefined && item[key]!==null && item[key]!=='') return item[key];
@@ -370,6 +442,15 @@ LAYOUT_EDITOR_JS = r'''
     const sizes = [...new Set(texts.map(item=>item.font_size ?? item.default_font_size).filter(Number.isInteger))];
     fontInput.value = sizes.length===1 ? String(sizes[0]) : '';
     fontInput.placeholder = texts.length===0 ? '仅文字元素' : sizes.length>1 ? '多种字号' : '字号';
+    const mascots=mascotTargets();
+    const scaleValues=[...new Set(mascots.map(item=>item.scale_percent))];
+    scaleInput.disabled=mascots.length===0 || editor.saving;
+    scaleInput.value=scaleValues.length===1?String(scaleValues[0]):'';
+    scaleInput.placeholder=mascots.length===0?'仅角色图形':scaleValues.length>1?'多种缩放':'缩放百分比';
+    scaleHint.textContent=mascots.length===0?'仅角色图形支持缩放':
+      (editor.selected.size>mascots.length?'只调整所选角色，其他元素会跳过。':
+        (scaleValues.length>1?'所选角色有不同缩放值。':'100% 为默认大小；范围 25–300%。拖动四角可等比例缩放。'));
+    byId('layout-editor-scale-default').disabled=mascots.length===0 || editor.saving;
     const families=texts.map(item=>hasStyleOverride(item.id,'font_family')?String(editor.profile.elements[item.id].font_family||''):'');
     const uniqueFamilies=[...new Set(families)];
     fontFamilyInput.disabled=texts.length===0 || editor.saving;
@@ -644,6 +725,47 @@ LAYOUT_EDITOR_JS = r'''
     updateInspector();
     queuePreview();
   }
+  function mascotDimensions(item,scalePercent) {
+    return {
+      width:Math.floor(item.base_width*scalePercent/100+0.5),
+      height:Math.floor(item.base_height*scalePercent/100+0.5)
+    };
+  }
+  function setMascotScale(value) {
+    if (!Number.isInteger(value) || value<25 || value>300) {
+      setStatus('角色缩放需为 25–300 的整数百分比。');
+      updateInspector();
+      return false;
+    }
+    const targets=mascotTargets();
+    if (!targets.length) return false;
+    for (const item of targets) {
+      const [left,top]=item.bbox;
+      const dimensions=mascotDimensions(item,value);
+      writeOverride(item.id,{scale_percent:value});
+      item.scale_percent=value;
+      item.bbox=[left,top,left+dimensions.width,top+dimensions.height];
+    }
+    drawOverlay();
+    updateInspector();
+    queuePreview();
+    return true;
+  }
+  function resetMascotScale() {
+    const targets=mascotTargets();
+    if (!targets.length) return;
+    for (const item of targets) {
+      const [left,top]=item.bbox;
+      const value=item.default_scale_percent;
+      const dimensions=mascotDimensions(item,value);
+      removeOverride(item.id,'scale_percent');
+      item.scale_percent=value;
+      item.bbox=[left,top,left+dimensions.width,top+dimensions.height];
+    }
+    drawOverlay();
+    updateInspector();
+    queuePreview();
+  }
   function removeOverride(id,key) {
     const entry=editor.profile&&editor.profile.elements&&editor.profile.elements[id];
     if (!entry) return;
@@ -777,10 +899,10 @@ LAYOUT_EDITOR_JS = r'''
   }
 
   function stagePoint(clientX,clientY) {
-    const rect=stage.getBoundingClientRect();
-    const width=stage.clientWidth, height=stage.clientHeight;
+    const rect=overlay.getBoundingClientRect();
+    const width=rect.width, height=rect.height;
     if (!width || !height) return null;
-    const left=rect.left+stage.clientLeft, top=rect.top+stage.clientTop;
+    const left=rect.left, top=rect.top;
     return {
       x:Math.max(0,Math.min(1920,(clientX-left)*1920/width)),
       y:Math.max(0,Math.min(480,(clientY-top)*480/height))
@@ -793,7 +915,35 @@ LAYOUT_EDITOR_JS = r'''
     if (!id) return;
     const point=stagePoint(event.clientX,event.clientY);
     if (!point) return;
+    const item=editor.sceneById.get(id);
+    const resizeCorner=target.dataset.resizeCorner;
+    if (resizeCorner && isScalableMascot(item) && editor.selected.size===1 && editor.selected.has(id)) {
+      const [left,top,right,bottom]=item.bbox;
+      const corners={
+        nw:{point:[left,top],anchor:[right,bottom],sx:-1,sy:-1},
+        ne:{point:[right,top],anchor:[left,bottom],sx:1,sy:-1},
+        sw:{point:[left,bottom],anchor:[right,top],sx:-1,sy:1},
+        se:{point:[right,bottom],anchor:[left,top],sx:1,sy:1}
+      };
+      const corner=corners[resizeCorner];
+      if (!corner) return;
+      pointerGesture={
+        mode:'resize',pointerId:event.pointerId,id,corner:resizeCorner,sx:corner.sx,sy:corner.sy,
+        clientX:event.clientX,clientY:event.clientY,startX:point.x,startY:point.y,
+        pointerOffsetX:point.x-corner.point[0],pointerOffsetY:point.y-corner.point[1],
+        anchorX:corner.anchor[0],anchorY:corner.anchor[1],originalBbox:item.bbox.slice(),
+        startScale:item.scale_percent,startDx:currentOffset(id,'dx'),startDy:currentOffset(id,'dy'),
+        baseWidth:item.base_width,baseHeight:item.base_height,
+        profileBefore:clone(editor.profile),sceneBefore:clone(editor.scene),
+        dragging:false,moved:false,canDrag:!editor.previewPending
+      };
+      try { stage.setPointerCapture(event.pointerId); } catch (_) {}
+      stage.focus({preventScroll:true});
+      event.preventDefault();
+      return;
+    }
     pointerGesture={
+      mode:'move',
       pointerId:event.pointerId,id,multi:event.ctrlKey||event.metaKey,
       clientX:event.clientX,clientY:event.clientY,startX:point.x,startY:point.y,
       dragging:false,moved:false,canDrag:!editor.previewPending
@@ -821,6 +971,46 @@ LAYOUT_EDITOR_JS = r'''
     if (!gesture || gesture.pointerId!==event.pointerId) return;
     const distance=Math.hypot(event.clientX-gesture.clientX,event.clientY-gesture.clientY);
     if (!gesture.dragging && distance<=3) return;
+    if (gesture.mode==='resize') {
+      if (!gesture.canDrag) return;
+      const point=stagePoint(event.clientX,event.clientY);
+      if (!point) return;
+      const vectorX=gesture.sx*gesture.baseWidth;
+      const vectorY=gesture.sy*gesture.baseHeight;
+      const denom=gesture.baseWidth*gesture.baseWidth+gesture.baseHeight*gesture.baseHeight;
+      const pointerX=point.x-gesture.pointerOffsetX-gesture.anchorX;
+      const pointerY=point.y-gesture.pointerOffsetY-gesture.anchorY;
+      const projected=100*(pointerX*vectorX+pointerY*vectorY)/denom;
+      if (!Number.isFinite(projected)) return;
+      const requested=Math.max(25,Math.min(300,Math.round(projected)));
+      const item=editor.sceneById.get(gesture.id);
+      if (!isScalableMascot(item)) return;
+      let best=null;
+      let bestDistance=Infinity;
+      for (let candidate=25;candidate<=300;candidate++) {
+        const dimensions=mascotDimensions(item,candidate);
+        const left=gesture.sx<0?gesture.anchorX-dimensions.width:gesture.anchorX;
+        const top=gesture.sy<0?gesture.anchorY-dimensions.height:gesture.anchorY;
+        const dx=Math.round(gesture.startDx+left-gesture.originalBbox[0]);
+        const dy=Math.round(gesture.startDy+top-gesture.originalBbox[1]);
+        if (dx < -1920 || dx > 1920 || dy < -480 || dy > 480) continue;
+        const difference=Math.abs(candidate-requested);
+        if (difference<bestDistance) { best={candidate,dimensions,left,top,dx,dy};bestDistance=difference; }
+      }
+      if (!best) return;
+      const changed=best.candidate!==item.scale_percent ||
+        best.dx!==currentOffset(gesture.id,'dx') || best.dy!==currentOffset(gesture.id,'dy');
+      if (!changed) return;
+      writeOverride(gesture.id,{scale_percent:best.candidate,dx:best.dx,dy:best.dy});
+      item.scale_percent=best.candidate;
+      item.bbox=[best.left,best.top,best.left+best.dimensions.width,best.top+best.dimensions.height];
+      gesture.dragging=true;
+      gesture.moved=true;
+      stage.classList.add('is-dragging');
+      drawOverlay();
+      updateInspector();
+      return;
+    }
     if (!gesture.dragging && !beginPointerDrag(gesture)) return;
     const point=stagePoint(event.clientX,event.clientY);
     const primary=editor.sceneById.get(gesture.primaryId);
@@ -844,7 +1034,13 @@ LAYOUT_EDITOR_JS = r'''
     if (!canceled) updatePointerGesture(event);
     pointerGesture=null;
     stage.classList.remove('is-dragging');
-    if (gesture.dragging) {
+    if (gesture.mode==='resize') {
+      if (canceled) restoreResizeGesture(gesture);
+      else if (gesture.moved) {
+        queuePreview();
+        suppressFollowingClick();
+      }
+    } else if (gesture.dragging) {
       if (gesture.moved) queuePreview();
       suppressFollowingClick();
     } else if (!canceled && gesture.id) {
@@ -853,6 +1049,26 @@ LAYOUT_EDITOR_JS = r'''
     try {
       if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
     } catch (_) {}
+  }
+  function restoreResizeGesture(gesture) {
+    editor.profile=gesture.profileBefore;
+    editor.scene=gesture.sceneBefore;
+    editor.sceneById=new Map(editor.scene.map(item=>[item.id,item]));
+    drawOverlay();
+    updateInspector();
+    setStatus('已取消角色缩放。');
+  }
+  function cancelActiveResize() {
+    const gesture=pointerGesture;
+    if (!gesture || gesture.mode!=='resize') return false;
+    pointerGesture=null;
+    stage.classList.remove('is-dragging');
+    try {
+      if (stage.hasPointerCapture(gesture.pointerId)) stage.releasePointerCapture(gesture.pointerId);
+    } catch (_) {}
+    restoreResizeGesture(gesture);
+    suppressFollowingClick();
+    return true;
   }
 
   byId('layout-editor-open').addEventListener('click',openEditor);
@@ -894,7 +1110,26 @@ LAYOUT_EDITOR_JS = r'''
     if (fontInput.value==='') return;
     setFontSize(Math.round(Number(fontInput.value)));
   });
+  scaleInput.addEventListener('change',()=>{
+    if (scaleInput.value==='') {
+      setStatus('角色缩放需为 25–300 的整数百分比。');
+      updateInspector();
+      return;
+    }
+    const value=Number(scaleInput.value);
+    if (!Number.isInteger(value) || value<25 || value>300) {
+      setStatus('角色缩放需为 25–300 的整数百分比。');
+      updateInspector();
+      return;
+    }
+    setMascotScale(value);
+  });
+  byId('layout-editor-scale-default').addEventListener('click',resetMascotScale);
   stage.addEventListener('keydown',event=>{
+    if (event.key==='Escape' && cancelActiveResize()) {
+      event.preventDefault();
+      return;
+    }
     if (!editor.open || editor.saving || event.defaultPrevented || event.isComposing || event.keyCode===229 ||
         event.ctrlKey || event.metaKey || event.altKey || !editor.selected.size) return;
     const target=event.target;

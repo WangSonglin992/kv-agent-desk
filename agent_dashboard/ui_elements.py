@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 
+MASCOT_ELEMENT_IDS = frozenset(
+    f"agent.{provider}.status_indicator"
+    for provider in ("codex", "zcode", "antigravity")
+)
+MASCOT_DEFAULT_SCALE_PERCENT = 100
+MASCOT_MIN_SCALE_PERCENT = 25
+MASCOT_MAX_SCALE_PERCENT = 300
+
+
 def _group(target: dict[str, dict[str, Any]], element_id: str, label: str) -> None:
     target[element_id] = {"kind": "group", "label": label, "parent": None}
 

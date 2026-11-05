@@ -15,7 +15,12 @@ from agent_dashboard.ui_profiles import (
     MAX_PROFILE_BYTES,
     UIProfiles,
 )
-from agent_dashboard.ui_elements import ELEMENT_DEFINITIONS
+from agent_dashboard.ui_elements import (
+    ELEMENT_DEFINITIONS,
+    MASCOT_ELEMENT_IDS,
+    MASCOT_MAX_SCALE_PERCENT,
+    MASCOT_MIN_SCALE_PERCENT,
+)
 
 
 def sample_profile(profile_id="test-theme", layout="aurora", **overrides):
@@ -136,6 +141,41 @@ class UIProfilesTests(unittest.TestCase):
             self.assertEqual(imported["elements"], normalized_elements)
             self.assertEqual(store.export("element-theme"), imported)
             self.assertEqual(UIProfiles(directory).get("element-theme"), imported)
+
+    def test_mascot_scale_is_limited_to_status_indicators_and_bounded_integers(self):
+        for identity in MASCOT_ELEMENT_IDS:
+            for value in (MASCOT_MIN_SCALE_PERCENT, 100, MASCOT_MAX_SCALE_PERCENT):
+                with self.subTest(identity=identity, value=value):
+                    normalized = UIProfiles.validate(sample_profile(
+                        "mascot-scale", elements={identity: {"scale_percent": value}}))
+                    self.assertEqual(normalized["elements"][identity]["scale_percent"], value)
+
+        for value in (True, 25.0, 24, 301, -1, "100"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                UIProfiles.validate(sample_profile(
+                    "mascot-scale", elements={"agent.codex.status_indicator": {"scale_percent": value}}))
+
+        for identity in ("agent.codex.status_badge", "agent.codex.status_text",
+                         "agent.codex.name", "header.panel"):
+            with self.subTest(identity=identity), self.assertRaises(ValueError):
+                UIProfiles.validate(sample_profile(
+                    "not-a-mascot", elements={identity: {"scale_percent": 150}}))
+
+    def test_mascot_scale_optional_field_survives_saved_import_round_trip(self):
+        identity = "agent.antigravity.status_indicator"
+        draft = sample_profile("mascot-scale-theme", elements={identity: {"dx": -2, "dy": 5,
+                                                                          "scale_percent": 137}})
+        with tempfile.TemporaryDirectory() as folder:
+            store = UIProfiles(Path(folder) / "profiles")
+            saved = store.import_profile(draft)
+            self.assertEqual(saved["elements"][identity], {"dx": -2, "dy": 5, "scale_percent": 137})
+            self.assertEqual(store.export("mascot-scale-theme"), saved)
+            restarted = UIProfiles(Path(folder) / "profiles")
+            self.assertEqual(restarted.get("mascot-scale-theme"), saved)
+
+        legacy = UIProfiles.validate(sample_profile(
+            "legacy-theme", elements={"agent.codex.status_indicator": {"dx": 4}}))
+        self.assertEqual(legacy["elements"]["agent.codex.status_indicator"], {"dx": 4})
 
     def test_invalid_element_ids_properties_types_and_ranges_are_rejected(self):
         cases = (
