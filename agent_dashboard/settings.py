@@ -33,10 +33,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "lcd_height": 462,
     "codex_no_five_hour_limit": False,
     "ui_id": "classic",
+    "right_panel_mode": "accounts",
+    "cluster_ssh_host": "",
+    "cluster_refresh_seconds": 60,
 }
 
 _ALLOWED_FIELDS = frozenset(DEFAULT_SETTINGS)
 _UI_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
+_CLUSTER_HOST_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _RUN_SUBKEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _RUN_VALUE_NAME = "KVAgentDesk"
 
@@ -59,6 +63,18 @@ def _validate_setting(name: str, value: Any) -> Any:
     if name == "ui_id":
         if not isinstance(value, str) or not _UI_ID_PATTERN.fullmatch(value):
             raise ValueError("ui_id must be a lowercase profile slug")
+        return value
+    if name == "right_panel_mode":
+        if not isinstance(value, str) or value not in {"accounts", "cluster"}:
+            raise ValueError("right_panel_mode must be accounts or cluster")
+        return value
+    if name == "cluster_ssh_host":
+        if not isinstance(value, str) or (value and not _CLUSTER_HOST_PATTERN.fullmatch(value)):
+            raise ValueError("cluster_ssh_host must be an SSH host alias")
+        return value
+    if name == "cluster_refresh_seconds":
+        if type(value) is not int or not 15 <= value <= 3600:
+            raise ValueError("cluster_refresh_seconds must be between 15 and 3600")
         return value
     raise ValueError(f"Unknown setting: {name}")
 

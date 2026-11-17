@@ -294,6 +294,48 @@ class WebTests(unittest.TestCase):
         self.assertEqual(result["profile"]["elements"]["agent.codex.status_indicator"]["scale_percent"], 150)
         self.assertFalse((Path(self.folder.name) / "ui-profiles").exists())
 
+    def test_cluster_mode_settings_are_persistent_and_do_not_query_in_request(self):
+        fields = {"right_panel_mode": "cluster", "cluster_ssh_host": "example-login",
+                  "cluster_refresh_seconds": 120}
+        with patch.object(self.dashboard.cluster, "_query", side_effect=AssertionError("background only")):
+            with self.post("/api/settings", fields, self.dashboard.token) as response:
+                self.assertTrue(json.load(response)["ok"])
+            with urllib.request.urlopen(self.url + "/api/state") as response:
+                snapshot = json.load(response)
+        self.assertEqual(snapshot["right_panel_mode"], "cluster")
+        self.assertEqual(snapshot["cluster"]["refresh_seconds"], 120)
+        restored = Dashboard(self.dashboard.args)
+        self.assertEqual(restored.right_panel_mode, "cluster")
+        self.assertEqual(restored.cluster.snapshot()["refresh_seconds"], 120)
+        for key, value in fields.items():
+            self.assertEqual(restored.settings.get()[key], value)
+
+    def test_cluster_refresh_is_protected_and_cannot_supply_remote_commands(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.post("/api/cluster/refresh", {})
+        self.assertEqual(caught.exception.code, 403)
+        with patch.object(self.dashboard.cluster, "request_refresh", return_value=True) as refresh:
+            with self.post("/api/cluster/refresh", {}, self.dashboard.token) as response:
+                self.assertTrue(json.load(response)["queued"])
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                self.post("/api/cluster/refresh", {"command": "something"}, self.dashboard.token)
+            self.assertEqual(caught.exception.code, 400)
+        refresh.assert_called_once()
+
+    def test_frame_identity_changes_only_when_panel_or_cluster_source_changes(self):
+        profile = self.dashboard.current_profile()
+        old = self.dashboard.frame_metadata(profile)
+        self.dashboard.update_settings({"right_panel_mode": "cluster", "cluster_ssh_host": "first-login"})
+        first = self.dashboard.frame_metadata(profile)
+        self.assertNotEqual(old, first)
+        self.assertNotIn("first-login", json.dumps(first))
+        self.dashboard.update_settings({"cluster_refresh_seconds": 300})
+        self.assertEqual(first, self.dashboard.frame_metadata(profile))
+        self.dashboard.update_settings({"cluster_ssh_host": "second-login"})
+        self.assertNotEqual(first, self.dashboard.frame_metadata(profile))
+        self.dashboard.update_settings({"right_panel_mode": "accounts"})
+        self.assertEqual(old, self.dashboard.frame_metadata(profile))
+
     def test_custom_ui_import_export_and_restart_never_include_account_data(self):
         profile = self.dashboard.ui_profiles.export("paper")
         profile.update(id="custom_paper", name="Synthetic custom")

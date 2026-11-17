@@ -34,6 +34,7 @@ from .render import is_animated, render
 from .retention import LastGoodStore
 from .subscriptions import SubscriptionProfiles
 from .accounts.monitor import AccountMonitor
+from .cluster import ClusterMonitor
 from .settings import AppSettings, get_autostart, set_autostart
 from .paths import user_state_directory, legacy_state_directories
 from .web import PAGE
@@ -50,7 +51,7 @@ ASSET_FILES = {name: Path(__file__).with_name("assets") / name for name in
                ("chatgpt.png", "glm.png", "google.png", "deepseek.png", "app.ico")}
 
 
-def ui_demo_snapshot() -> dict:
+def ui_demo_snapshot(right_panel_mode: str = "accounts") -> dict:
     """Synthetic style previews; never use current account/profile values."""
     stamp = "2035-06-12T14:30:00+08:00"
     reset = "2035-06-15T10:00:00+08:00"
@@ -77,7 +78,9 @@ def ui_demo_snapshot() -> dict:
     accounts = [{"id": key, "name": "Demo", "brand": "deepseek", "kind": "balance",
                  "known": True, "value": value, "currency": "CNY"}
                 for key, value in (("deepseek_lab", "123.45"), ("deepseek_personal", "67.89"))]
-    return {"demo": True, "agents": agents, "accounts": accounts, "display": {"connected": False}}
+    return {"demo": True, "agents": agents, "accounts": accounts, "display": {"connected": False},
+            "right_panel_mode": right_panel_mode,
+            "cluster": ClusterMonitor(None, threading.Event(), demo=True).snapshot()}
 
 
 def display_data(agent: dict) -> dict:
@@ -162,6 +165,8 @@ class Dashboard:
         self.store.values = {key: display_data(value) for key, value in self.store.values.items()}
         self.profiles = SubscriptionProfiles(None if args.demo else args.state_dir / "subscriptions.json")
         self.accounts = AccountMonitor(None if args.demo else args.state_dir / "accounts-last-good.json", self.stop, args.demo)
+        self.cluster = ClusterMonitor(None if args.demo else args.state_dir / "cluster-last-good.json", self.stop, args.demo)
+        self.configure_cluster(prefs)
         self.adapters = []
         self.device = None
         self.last_connect = 0.0
@@ -176,6 +181,7 @@ class Dashboard:
         self.snapshot = {"app": APP_ID, "version": __version__, "demo": args.demo,
                          "agents": initial_agents,
                          "accounts": self.accounts.snapshot(),
+                         "right_panel_mode": self.right_panel_mode, "cluster": self.cluster.snapshot(),
                          "display": self.display_status, "usb_enabled": self.usb_enabled,
                          "updated_at": datetime.now().astimezone().isoformat()}
         self.png = self.encode(self.dim(render(self.snapshot, profile=self.current_profile(), animation_time=0)), "PNG")
@@ -230,12 +236,25 @@ class Dashboard:
                 self.brightness = prefs["brightness"]
                 self.ui_id = prefs["ui_id"]
                 self.snapshot["usb_enabled"] = self.usb_enabled
-            if "ui_id" in fields:
+            self.configure_cluster(prefs)
+            if set(fields) & {"ui_id", "right_panel_mode", "cluster_ssh_host", "cluster_refresh_seconds"}:
                 with self.lock:
                     agents = deepcopy(self.latest_agents)
                 self.tick(agents)
                 self.persist_frame(force=True)
             return prefs
+
+    def configure_cluster(self, prefs: dict) -> None:
+        self.cluster.configure(prefs["right_panel_mode"] == "cluster", prefs["cluster_ssh_host"],
+                               prefs["cluster_refresh_seconds"])
+        self.right_panel_mode = prefs["right_panel_mode"]
+        self._cluster_source_id = hashlib.sha256(prefs["cluster_ssh_host"].encode("utf-8")).hexdigest()
+
+    def frame_metadata(self, profile: dict) -> dict:
+        metadata = {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
+        if self.right_panel_mode == "cluster":
+            metadata.update(right_panel_mode="cluster", cluster_source_id=self._cluster_source_id)
+        return metadata
 
     def current_profile(self) -> dict:
         return self.ui_profiles.get(self.ui_id)
@@ -284,6 +303,7 @@ class Dashboard:
                 self.brightness = prefs["brightness"]
                 self.snapshot["usb_enabled"] = self.usb_enabled
             startup_ready = self.restore_startup_registration()
+            self.configure_cluster(prefs)
             self._configuration_pending = not metadata_ready or not startup_ready
             if not self._configuration_pending:
                 logging.info("Saved local configuration restored")
@@ -341,10 +361,10 @@ class Dashboard:
         if not self.ui_profiles.contains(ui_id):
             raise ValueError("未找到此 UI")
         profile = self.ui_profiles.get(ui_id)
-        key = self.profile_hash(profile)
+        key = self.profile_hash(profile) + ":" + self.right_panel_mode
         with self.render_lock:
             if key not in self.ui_preview_cache:
-                image = render(ui_demo_snapshot(), now=datetime.fromisoformat("2035-06-12T14:30:00+08:00"),
+                image = render(ui_demo_snapshot(self.right_panel_mode), now=datetime.fromisoformat("2035-06-12T14:30:00+08:00"),
                                profile=profile, animation_time=.25)
                 self.ui_preview_cache[key] = self.encode(image, "PNG")
             return self.ui_preview_cache[key]
@@ -526,6 +546,7 @@ class Dashboard:
         agents = [self.present_agent(agent) for agent in agents]
         state = {"app": APP_ID, "version": __version__, "agents": agents, "demo": self.args.demo,
                  "accounts": self.accounts.snapshot(),
+                 "right_panel_mode": self.right_panel_mode, "cluster": self.cluster.snapshot(),
                  "display": deepcopy(self.display_status), "usb_enabled": self.usb_enabled,
                  "updated_at": datetime.now().astimezone().isoformat()}
         profile = self.current_profile()
@@ -534,7 +555,7 @@ class Dashboard:
         self.send(image)
         state["display"] = deepcopy(self.display_status)
         self._last_raw_frame = image
-        self._last_frame_profile = {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
+        self._last_frame_profile = self.frame_metadata(profile)
         with self.lock:
             self.snapshot, self.png = state, self.encode(self.dim(image), "PNG")
         self.persist_frame()
@@ -565,11 +586,11 @@ class Dashboard:
         path = self.args.state_dir / "last-frame.png"
         profile = self.current_profile()
         metadata = self.args.state_dir / "last-frame-meta.json"
-        matching_profile = profile["id"] == "classic"
+        matching_profile = profile["id"] == "classic" and self.right_panel_mode == "accounts"
         if metadata.is_file():
             try:
                 saved_metadata = json.loads(metadata.read_text(encoding="utf-8"))
-                matching_profile = saved_metadata == {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
+                matching_profile = saved_metadata == self.frame_metadata(profile)
             except (OSError, ValueError, TypeError):
                 matching_profile = False
         if not self.args.demo and path.is_file() and matching_profile:
@@ -582,7 +603,7 @@ class Dashboard:
         if image is None:
             image = render(self.snapshot, profile=profile, animation_time=0)
         self._last_raw_frame = image
-        self._last_frame_profile = {"ui_id": profile["id"], "profile_hash": self.profile_hash(profile)}
+        self._last_frame_profile = self.frame_metadata(profile)
         self.send(image)
         with self.lock:
             self.png = self.encode(self.dim(image), "PNG")
@@ -609,6 +630,7 @@ class Dashboard:
         try:
             self.retry_saved_configuration(force=True)
             self.restore_frame()
+            self.cluster.start()
             if self.updates is not None:
                 self.updates.start()
             updater = threading.Thread(target=self.update_loop, daemon=True, name="agent-data-updates")
@@ -676,6 +698,8 @@ def handler(dashboard: Dashboard):
                     state = deepcopy(dashboard.snapshot)
                 state["subscription_profiles"] = dashboard.profiles.get_all()
                 state["settings"] = dashboard.settings.get()
+                state["cluster"] = dashboard.cluster.snapshot()
+                state["right_panel_mode"] = dashboard.right_panel_mode
                 state["auto_start_registered"] = get_autostart()
                 state["restored_before_refresh"] = dashboard.restored_before_refresh
                 state["ui"] = dashboard.ui_catalogue()
@@ -740,6 +764,14 @@ def handler(dashboard: Dashboard):
                     self.send_data(500, "text/plain", b"Could not save USB setting")
                     return
                 self.send_data(200, "application/json", b'{"ok":true}')
+            elif self.path == "/api/cluster/refresh" and isinstance(data, dict):
+                if data:
+                    self.send_data(400, "application/json", b'{"error":"Empty refresh request required"}')
+                    return
+                queued = dashboard.cluster.request_refresh()
+                self.send_data(200, "application/json; charset=utf-8",
+                               json.dumps({"ok": True, "queued": queued,
+                                           "cluster": dashboard.cluster.snapshot()}, ensure_ascii=False).encode("utf-8"))
             elif self.path == "/api/settings" and isinstance(data, dict):
                 try:
                     prefs = dashboard.update_settings(data)

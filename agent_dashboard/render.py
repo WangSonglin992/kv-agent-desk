@@ -843,6 +843,169 @@ def _draw_account_elements(image: Image.Image, draw: ImageDraw.ImageDraw | Scene
           fill=colors["subtle"], font=font(14, scale=scale), visible=stale)
 
 
+def _cluster_number(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "—"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+    if not math.isfinite(numeric) or numeric < 0:
+        return "—"
+    return str(int(numeric)) if numeric.is_integer() else f"{numeric:g}"
+
+
+def _cluster_memory(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "—"
+    try:
+        megabytes = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return "—"
+    if not math.isfinite(megabytes) or megabytes < 0:
+        return "—"
+    gigabytes = megabytes / 1024
+    return f"{gigabytes:.1f}".rstrip("0").rstrip(".")
+
+
+def _cluster_pair(allocated: object, total: object, *, memory: bool = False) -> str:
+    formatter = _cluster_memory if memory else _cluster_number
+    pair = f"{formatter(allocated)}/{formatter(total)}"
+    return pair + (" GB" if memory else "")
+
+
+def _cluster_resource_typography(draw: ImageDraw.ImageDraw | SceneCanvas,
+                                 row_height: float, scale: int) -> tuple[ImageFont.ImageFont, int]:
+    """Use 15px, 18px-pitch resource text when the node row has room."""
+    start = 19
+    for size in range(15, 9, -1):
+        candidate = font(size, scale=scale)
+        boxes = [draw.textbbox((0, 0), sample, font=candidate)
+                 for sample in ("128/128", "等待数据", "内存")]
+        glyph_height = max(box[3] - box[1] for box in boxes)
+        glyph_bottom = max(box[3] for box in boxes)
+        step = min(18, math.floor((row_height - start - glyph_bottom - 1) / 2))
+        if step >= glyph_height:
+            return candidate, step
+    candidate = font(10, scale=scale)
+    boxes = [draw.textbbox((0, 0), sample, font=candidate)
+             for sample in ("128/128", "等待数据", "内存")]
+    glyph_height = max(box[3] - box[1] for box in boxes)
+    step = max(glyph_height, min(18, math.floor((row_height - start - max(box[3] for box in boxes) - 1) / 2)))
+    return candidate, step
+
+
+def _cluster_update_label(value: object) -> str:
+    if isinstance(value, str) and value.strip():
+        try:
+            updated = datetime.fromisoformat(value.strip().replace("Z", "+00:00")).astimezone()
+            return "更新于 " + updated.strftime("%m/%d %H:%M")
+        except (ValueError, TypeError, AttributeError, OverflowError):
+            pass
+    return "成功更新时间待获取"
+
+
+def _cluster_state(data: dict) -> tuple[str, str]:
+    raw = clean(data.get("state"))
+    value = raw.casefold()
+    labels = {
+        "idle": "空闲", "up": "在线", "allocated": "运行", "alloc": "运行",
+        "mixed": "部分占用", "mix": "部分占用", "busy": "繁忙",
+        "down": "离线", "drain": "维护", "draining": "维护", "maint": "维护",
+        "unknown": "未知",
+    }
+    label = labels.get(value, raw[:16] if raw else "状态未知")
+    if value in {"down", "drain", "draining", "maint"}:
+        color_role = "offline"
+    elif value in {"allocated", "alloc", "mixed", "mix", "busy"}:
+        color_role = "working"
+    elif value in {"idle", "up"}:
+        color_role = "working"
+    else:
+        color_role = "unknown"
+    return label, color_role
+
+
+def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
+                       x: int, y: int, width: int, height: int,
+                       profile: dict | None = None) -> None:
+    """Draw the optional four-node cluster panel without changing account mode."""
+    design = _resolve_design(profile)
+    if not isinstance(draw, SceneCanvas):
+        draw = SceneCanvas(None, design, draw=draw, prefix="cluster")
+    colors, scale, layout = design["colors"], design["font_scale"], design["layout"]
+    known = data.get("known") is True
+    stale = bool(data.get("stale"))
+    checking = bool(data.get("checking"))
+    nodes = data.get("nodes") if isinstance(data.get("nodes"), list) else []
+
+    with draw.group("cluster", (x, y, x + width, y + height)):
+        _card(draw, x, y, width, height, design, "cluster", account=True)
+        header_font = font(16, True, scale=scale)
+        status_font = font(12, scale=scale)
+        left, right = x + 14, x + width - 14
+        _text(draw, (left, y + 10), "集群资源", "title", fill=colors["text"], font=header_font)
+
+        stale_text = "待检查更新" if stale else ""
+        checking_text = "检查中" if checking and not stale else ""
+        status_text = stale_text or checking_text
+        status_x = right - draw.textlength(status_text, font=status_font)
+        _text(draw, (status_x, y + 12), stale_text, "stale_note", fill=colors["subtle"],
+              font=status_font, visible=bool(stale_text))
+        _text(draw, (status_x, y + 12), checking_text, "checking", fill=colors["muted"],
+              font=status_font, visible=bool(checking_text))
+
+        row_start = y + 34
+        row_height = (height - 62) / 4
+        for index in range(4):
+            node_id = f"cluster.node_{index + 1}"
+            node_y = round(row_start + index * row_height)
+            node_bottom = round(row_start + (index + 1) * row_height) - 1
+            node_height = max(1, node_bottom - node_y)
+            supplied = nodes[index] if index < len(nodes) and isinstance(nodes[index], dict) else {}
+            with draw.group(node_id, (x + 8, node_y, x + width - 8, node_y + node_height)):
+                row_left, row_right = x + 13, x + width - 13
+                _shape(draw, "rounded_rectangle", (x + 8, node_y, x + width - 8, node_y + node_height),
+                       "panel", radius=5, fill=colors["surface_alt"])
+
+                supplied_name = clean(supplied.get("name"))
+                node_name = supplied_name or f"node-{index + 1:02d}"
+                node_status, state_role = _cluster_state(supplied) if known and supplied else ("等待", "subtle")
+                name_font = font(15, True, scale=scale)
+                state_font = font(11, scale=scale)
+                state_x = row_right - 5 - draw.textlength(node_status, font=state_font)
+                _text(draw, (row_left, node_y + 1), short(draw, node_name, name_font,
+                      max(28, state_x - row_left - 16)), "name", fill=colors["text"], font=name_font)
+                _shape(draw, "ellipse", (state_x - 12, node_y + 7, state_x - 6, node_y + 13),
+                       "state_dot", fill=colors[state_role])
+                _text(draw, (state_x, node_y + 2), short(draw, node_status, state_font,
+                      max(18, row_right - state_x)), "state", fill=colors[state_role], font=state_font)
+
+                resource_rows = (
+                    ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
+                    ("memory_label", "memory_value", "内存", "memory_allocated_mb", "memory_total_mb", True),
+                    ("gpu_label", "gpu_value", "GPU", "gpu_allocated", "gpu_total", False),
+                )
+                resource_font, resource_step = _cluster_resource_typography(draw, node_height, scale)
+                for row_index, (label_slot, value_slot, label, allocated_key, total_key, memory) in enumerate(resource_rows):
+                    text_y = node_y + 19 + row_index * resource_step
+                    _text(draw, (row_left, text_y), label, label_slot,
+                          fill=colors["muted"], font=resource_font)
+                    if known and supplied:
+                        metric_value = _cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
+                                                     memory=memory)
+                    else:
+                        metric_value = "等待数据"
+                    value_width = draw.textlength(metric_value, font=resource_font)
+                    _text(draw, (row_right - value_width, text_y), metric_value, value_slot,
+                          fill=colors["text"], font=resource_font)
+
+        update_font = font(12, scale=scale)
+        updated_label = _cluster_update_label(data.get("updated_at"))
+        _text(draw, (left, y + height - 20), updated_label, "updated_at",
+              fill=colors["muted"], font=update_font)
+
+
 @lru_cache(maxsize=4)
 def _aurora_background(background: str, accent: str) -> Image.Image:
     """Cache the static wash so animated status arcs need no per-frame blur."""
@@ -913,18 +1076,24 @@ def _render(snapshot: dict, now: datetime | None, profile: dict | None,
         draw_agent(draw, agent, x, agent_width, design, animation_time, image=image,
                    y=top, height=card_height, now=now)
     account_x = SIZE[0] - margin - account_width
-    account_gap = max(12, gap)
-    account_height = (card_height - account_gap) // 2
-    accounts = snapshot.get("accounts", [])
-    for index, account in enumerate(accounts[:2]):
-        y = top + index * (account_height + account_gap)
-        draw_account(image, draw, account, account_x, y, width=account_width,
-                     profile=design, height=account_height)
+    if snapshot.get("right_panel_mode") == "cluster":
+        cluster = snapshot.get("cluster") if isinstance(snapshot.get("cluster"), dict) else {}
+        draw_cluster_panel(draw, cluster, account_x, top, width=account_width,
+                           height=card_height, profile=design)
+        page_stale = False
+    else:
+        account_gap = max(12, gap)
+        account_height = (card_height - account_gap) // 2
+        accounts = snapshot.get("accounts", [])
+        for index, account in enumerate(accounts[:2]):
+            y = top + index * (account_height + account_gap)
+            draw_account(image, draw, account, account_x, y, width=account_width,
+                         profile=design, height=account_height)
 
-    stale_account_indices = [index for index, account in enumerate(accounts[:2])
-                             if isinstance(account, dict) and account.get("stale")
-                             and f"account.{account.get('id', '')}" in ELEMENT_DEFINITIONS]
-    page_stale = bool(stale_account_indices) and not any(agent.get("stale") for agent in agents[:3] if isinstance(agent, dict))
+        stale_account_indices = [index for index, account in enumerate(accounts[:2])
+                                 if isinstance(account, dict) and account.get("stale")
+                                 and f"account.{account.get('id', '')}" in ELEMENT_DEFINITIONS]
+        page_stale = bool(stale_account_indices) and not any(agent.get("stale") for agent in agents[:3] if isinstance(agent, dict))
     _text(draw, (margin, SIZE[1] - 22), "数据待检查更新", "page.stale_note",
           fill=colors["subtle"], font=font(14, scale=design["font_scale"]), visible=page_stale)
     return image, draw.manifest() if capture else []

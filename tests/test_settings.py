@@ -88,6 +88,9 @@ class AppSettingsTests(unittest.TestCase):
     def test_defaults_and_memory_updates(self):
         settings = AppSettings()
         self.assertEqual(settings.get(), DEFAULT_SETTINGS)
+        self.assertEqual(settings.get()["right_panel_mode"], "accounts")
+        self.assertEqual(settings.get()["cluster_ssh_host"], "")
+        self.assertEqual(settings.get()["cluster_refresh_seconds"], 60)
         changed = settings.update({"brightness": 73, "lcd_height": 480})
         self.assertEqual(changed["brightness"], 73)
         self.assertEqual(changed["lcd_height"], 480)
@@ -128,6 +131,21 @@ class AppSettingsTests(unittest.TestCase):
                 self.assertEqual(disabled[name], loaded[name])
             self.assertEqual(AppSettings(path).get(), disabled)
 
+    def test_legacy_settings_receive_cluster_defaults_and_keep_existing_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.json"
+            path.write_text(json.dumps({"brightness": 47, "ui_id": "paper"}), encoding="utf-8")
+            settings = AppSettings(path)
+            loaded = settings.get()
+            self.assertEqual(loaded["right_panel_mode"], "accounts")
+            self.assertEqual(loaded["cluster_ssh_host"], "")
+            self.assertEqual(loaded["cluster_refresh_seconds"], 60)
+            saved = settings.update({"cluster_ssh_host": "hpc-login", "cluster_refresh_seconds": 300})
+            self.assertEqual(saved["brightness"], 47)
+            self.assertEqual(saved["ui_id"], "paper")
+            self.assertEqual(saved["right_panel_mode"], "accounts")
+            self.assertEqual(AppSettings(path).get(), saved)
+
     def test_invalid_updates_raise_without_changing_saved_data(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "settings.json"
@@ -139,11 +157,27 @@ class AppSettingsTests(unittest.TestCase):
                 {"rotation": 90}, {"usb_enabled": 1}, {"auto_start": "yes"},
                 {"auto_update": 1}, {"auto_update": "yes"},
                 {"lcd_height": 463}, {"ui_id": "../theme"}, {"ui_id": 1}, {"other": 1},
+                {"right_panel_mode": "other"}, {"right_panel_mode": 1}, {"right_panel_mode": []},
+                {"cluster_ssh_host": "user@host"}, {"cluster_ssh_host": "host name"},
+                {"cluster_ssh_host": "host/name"}, {"cluster_ssh_host": "-host"},
+                {"cluster_ssh_host": "a" * 129}, {"cluster_ssh_host": 1},
+                {"cluster_refresh_seconds": 14}, {"cluster_refresh_seconds": 3601},
+                {"cluster_refresh_seconds": True}, {"cluster_refresh_seconds": "60"},
             ]
             for fields in invalid:
                 with self.subTest(fields=fields), self.assertRaises(ValueError):
                     settings.update(fields)
                 self.assertEqual(path.read_bytes(), original)
+
+    def test_cluster_settings_accept_alias_mode_and_interval_boundaries(self):
+        settings = AppSettings()
+        saved = settings.update({"right_panel_mode": "cluster", "cluster_ssh_host": "HPC_01.example-2",
+                                 "cluster_refresh_seconds": 15})
+        self.assertEqual(saved["right_panel_mode"], "cluster")
+        self.assertEqual(saved["cluster_ssh_host"], "HPC_01.example-2")
+        self.assertEqual(saved["cluster_refresh_seconds"], 15)
+        self.assertEqual(settings.update({"cluster_ssh_host": "", "cluster_refresh_seconds": 3600})[
+            "cluster_refresh_seconds"], 3600)
 
     def test_failed_atomic_replace_keeps_previous_file(self):
         with tempfile.TemporaryDirectory() as folder:

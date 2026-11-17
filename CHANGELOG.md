@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.0
+
+- Add an optional four-node Slurm resource panel in place of the two balance cards, with CPU, allocated memory, GPU totals and successful data timestamp.
+- Add persistent SSH-alias and refresh settings, defaulting to 60 seconds with 15–3600 second choices, plus throttled manual refresh.
+- Keep node collection asynchronous and read-only, restore a host-scoped last-good cache, and preserve account mode and existing layouts.
+
 ## 0.9.0
 
 - Add 25–300% mascot scaling to the visual layout inspector and proportional four-corner drag handles with the opposite corner fixed.

@@ -25,6 +25,7 @@ settings.json
 subscriptions.json
 last-good.json
 accounts-last-good.json
+cluster-last-good.json
 last-frame.png
 last-frame-meta.json
 updates.json

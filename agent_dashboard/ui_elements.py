@@ -97,6 +97,33 @@ for _account, _label in (("deepseek_lab", "课题组DeepSeek"), ("deepseek_perso
     _group(_elements, f"account.{_account}", f"{_label}卡片")
     _children(_elements, f"account.{_account}", _ACCOUNT_ELEMENTS)
 
+_group(_elements, "cluster", "集群面板")
+_children(_elements, "cluster", (
+    ("panel", "shape", "集群面板背景"),
+    ("title", "text", "集群面板标题"),
+    ("checking", "text", "集群检查状态"),
+    ("updated_at", "text", "集群数据更新时间"),
+    ("stale_note", "text", "集群数据更新提示"),
+))
+
+_CLUSTER_NODE_ELEMENTS = (
+    ("panel", "shape", "节点行背景"),
+    ("name", "text", "节点名称"),
+    ("state_dot", "shape", "节点状态点"),
+    ("state", "text", "节点状态"),
+    ("cpu_label", "text", "CPU标签"),
+    ("cpu_value", "text", "CPU分配值"),
+    ("memory_label", "text", "内存标签"),
+    ("memory_value", "text", "内存分配值"),
+    ("gpu_label", "text", "GPU标签"),
+    ("gpu_value", "text", "GPU分配值"),
+)
+
+for _node_number in range(1, 5):
+    _node_id = f"cluster.node_{_node_number}"
+    _elements[_node_id] = {"kind": "group", "label": f"节点 {_node_number}", "parent": "cluster"}
+    _children(_elements, _node_id, _CLUSTER_NODE_ELEMENTS)
+
 _elements["page.stale_note"] = {"kind": "text", "label": "页面数据更新提示", "parent": None}
 
 ELEMENT_DEFINITIONS: dict[str, dict[str, Any]] = _elements

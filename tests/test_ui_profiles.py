@@ -98,6 +98,13 @@ class UIProfilesTests(unittest.TestCase):
                 for account in ("deepseek_lab", "deepseek_personal")
             },
         }
+        children["cluster"] = {"panel": "shape", "title": "text", "checking": "text",
+                               "updated_at": "text", "stale_note": "text"}
+        for slot in range(1, 5):
+            children[f"cluster.node_{slot}"] = {
+                "panel": "shape", "name": "text", "state_dot": "shape", "state": "text",
+                "cpu_label": "text", "cpu_value": "text", "memory_label": "text",
+                "memory_value": "text", "gpu_label": "text", "gpu_value": "text"}
         expected_groups = set(children)
         expected_ids = expected_groups | {
             f"{parent}.{suffix}" for parent, elements in children.items() for suffix in elements
@@ -107,7 +114,8 @@ class UIProfilesTests(unittest.TestCase):
         self.assertIsNone(ELEMENT_DEFINITIONS["page.stale_note"]["parent"])
         for group in expected_groups:
             self.assertEqual(ELEMENT_DEFINITIONS[group]["kind"], "group")
-            self.assertIsNone(ELEMENT_DEFINITIONS[group]["parent"])
+            self.assertEqual(ELEMENT_DEFINITIONS[group]["parent"],
+                             "cluster" if group.startswith("cluster.node_") else None)
         for parent, elements in children.items():
             for suffix, kind in elements.items():
                 definition = ELEMENT_DEFINITIONS[f"{parent}.{suffix}"]

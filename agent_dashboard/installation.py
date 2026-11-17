@@ -36,6 +36,7 @@ _BACKUP_FILE_LIMITS = {
     "subscriptions.json": 1024 * 1024,
     "last-good.json": 16 * 1024 * 1024,
     "accounts-last-good.json": 4 * 1024 * 1024,
+    "cluster-last-good.json": 256 * 1024,
     "last-frame.png": 32 * 1024 * 1024,
     "last-frame-meta.json": 256 * 1024,
     "updates.json": 1024 * 1024,

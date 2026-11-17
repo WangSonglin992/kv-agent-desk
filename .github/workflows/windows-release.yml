@@ -214,7 +214,7 @@ jobs:
             (Join-Path $state "history.json"),
             (Join-Path (Join-Path $state "ui-profiles") "synthetic-style.json")
           )
-          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"brightness":100,"rotation":180,"usb_enabled":true,"auto_start":true,"auto_update":true,"lcd_height":462,"codex_no_five_hour_limit":false,"ui_id":"synthetic-style"}')
+          [System.IO.File]::WriteAllText($syntheticFiles[0], '{"brightness":100,"rotation":180,"usb_enabled":true,"auto_start":true,"auto_update":true,"lcd_height":462,"codex_no_five_hour_limit":false,"ui_id":"synthetic-style","right_panel_mode":"accounts","cluster_ssh_host":"","cluster_refresh_seconds":60}')
           [System.IO.File]::WriteAllText($syntheticFiles[1], '{"version":1,"profiles":{"codex":{"plan_name":"Synthetic plan","plan_spec":"Synthetic spec","expires_at":""},"zcode":{"plan_name":"","plan_spec":"","expires_at":""},"antigravity":{"plan_name":"","plan_spec":"","expires_at":""}}}')
           [System.IO.File]::WriteAllText($syntheticFiles[2], '{"synthetic-history":true}')
           [System.IO.File]::WriteAllText($syntheticFiles[3], '{"schema_version":1,"id":"synthetic-style","name":"Synthetic style","layout":"paper","elements":{}}')
