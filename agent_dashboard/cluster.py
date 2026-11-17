@@ -595,4 +595,3 @@ class ClusterMonitor:
                 continue
 
             self._wake.wait(min(next_poll - now, 1.0))
-
