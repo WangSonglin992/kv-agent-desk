@@ -919,33 +919,41 @@ def _cluster_cpu_status_role(node: dict) -> str:
 
 def _cluster_resource_typography(draw: ImageDraw.ImageDraw | SceneCanvas,
                                  row_height: float, scale: int, *, gpu_visible: bool,
-                                 content_width: float, values: list[str]) -> tuple[ImageFont.ImageFont, int, int]:
-    """Fit larger CPU-only metrics and keep GPU rows at their existing scale."""
+                                 content_width: float, values: list[str],
+                                 header_bottom: int) -> tuple[ImageFont.ImageFont, int, int]:
+    """Fit enlarged resource text to each node row and its available width."""
     row_count = 3 if gpu_visible else 2
-    base_size = 15 if gpu_visible else 20
-    target_step = 18 if gpu_visible else 24
+    base_size = 18 if gpu_visible else 22
+    target_step = 18 if gpu_visible else 26
     start = 19
     labels = ("CPU", "内存", "GPU")[:row_count]
     for size in range(base_size, 7, -1):
         candidate = font(size, scale=scale)
-        samples = list(labels) + values + ["等待数据"]
+        samples = list(labels) + values
+        if "等待数据" in values:
+            samples.append("等待数据")
         boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
         glyph_height = max(box[3] - box[1] for box in boxes)
         glyph_bottom = max(box[3] for box in boxes)
-        step = min(target_step, math.floor((row_height - start - glyph_bottom - 1) / (row_count - 1)))
+        resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
+        step = min(target_step, math.floor((row_height - resource_start - glyph_bottom - 1)
+                                           / (row_count - 1)))
         label_width = max(draw.textlength(label, font=candidate) for label in labels)
         value_width = max((draw.textlength(value, font=candidate) for value in values), default=0)
         if step >= glyph_height and label_width + 8 + value_width <= content_width:
-            return candidate, step, start
+            return candidate, step, resource_start
 
     candidate = font(8, scale=scale)
-    samples = list(labels) + values + ["等待数据"]
+    samples = list(labels) + values
+    if "等待数据" in values:
+        samples.append("等待数据")
     boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
     glyph_height = max(box[3] - box[1] for box in boxes)
     glyph_bottom = max(box[3] for box in boxes)
+    resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
     step = max(glyph_height, min(target_step,
-               math.floor((row_height - start - glyph_bottom - 1) / (row_count - 1))))
-    return candidate, step, start
+               math.floor((row_height - resource_start - glyph_bottom - 1) / (row_count - 1))))
+    return candidate, step, resource_start
 
 
 def _cluster_update_label(value: object) -> str:
@@ -1013,8 +1021,8 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
 
     with draw.group("cluster", (x, y, x + width, y + height)):
         _card(draw, x, y, width, height, design, "cluster", account=True)
-        header_font = font(16, True, scale=scale)
-        status_font = font(12, scale=scale)
+        header_font = font(18, True, scale=scale)
+        status_font = font(14, scale=scale)
         left, right = x + 14, x + width - 14
         _text(draw, (left, y + 10), "集群资源", "title", fill=colors["text"], font=header_font)
 
@@ -1027,8 +1035,16 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
         _text(draw, (status_x, y + 12), checking_text, "checking", fill=colors["muted"],
               font=status_font, visible=bool(checking_text))
 
-        row_start = y + 34
-        row_height = (height - 62) / 4
+        header_bottom = draw.textbbox((left, y + 10), "集群资源", font=header_font)[3]
+        if stale_text:
+            header_bottom = max(header_bottom, draw.textbbox((status_x, y + 12), stale_text,
+                                                               font=status_font)[3])
+        elif checking_text:
+            header_bottom = max(header_bottom, draw.textbbox((status_x, y + 12), checking_text,
+                                                               font=status_font)[3])
+        row_start_offset = max(34, header_bottom - y + 2)
+        row_start = y + row_start_offset
+        row_height = (height - row_start_offset - 28) / 4
         for index in range(4):
             node_id = f"cluster.node_{index + 1}"
             node_y = round(row_start + index * row_height)
@@ -1048,15 +1064,19 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
                 else:
                     node_status, state_role = "等待", "unknown"
                 state_color = colors["cluster_warning"] if state_role == "waiting" else colors[state_role]
-                name_font = font(17, True, scale=scale)
-                state_font = font(11, scale=scale)
+                name_font = font(19, True, scale=scale)
+                state_font = font(13, scale=scale)
                 state_x = row_right - 5 - draw.textlength(node_status, font=state_font)
-                _text(draw, (row_left, node_y + 1), short(draw, node_name, name_font,
-                      max(28, state_x - row_left - 16)), "name", fill=colors["text"], font=name_font)
+                name_text = short(draw, node_name, name_font, max(28, state_x - row_left - 16))
+                state_text = short(draw, node_status, state_font, max(18, row_right - state_x))
+                name_y = node_y - 2
+                _text(draw, (row_left, name_y), name_text, "name", fill=colors["text"], font=name_font)
                 _shape(draw, "ellipse", (state_x - 12, node_y + 7, state_x - 6, node_y + 13),
                        "state_dot", fill=state_color)
-                _text(draw, (state_x, node_y + 2), short(draw, node_status, state_font,
-                      max(18, row_right - state_x)), "state", fill=state_color, font=state_font)
+                _text(draw, (state_x, node_y + 2), state_text, "state", fill=state_color, font=state_font)
+                name_box = draw.textbbox((row_left, name_y), str(name_text), font=name_font)
+                state_box = draw.textbbox((state_x, node_y + 2), str(state_text), font=state_font)
+                header_bottom = max(name_box[3], state_box[3]) - node_y
 
                 resource_rows = (
                     ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
@@ -1074,7 +1094,8 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
                         metric_values.append("等待数据")
                 resource_font, resource_step, resource_start = _cluster_resource_typography(
                     draw, node_height, scale, gpu_visible=not hide_gpu,
-                    content_width=row_right - row_left, values=metric_values)
+                    content_width=row_right - row_left, values=metric_values,
+                    header_bottom=header_bottom)
                 active_count = len(active_rows)
                 for row_index, (label_slot, value_slot, label, allocated_key, total_key, memory) in enumerate(resource_rows):
                     visible = not (label_slot == "gpu_label" and hide_gpu)
@@ -1091,7 +1112,7 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
                     _text(draw, (row_right - value_width, text_y), metric_value, value_slot,
                           fill=colors["text"], font=resource_font, visible=visible)
 
-        update_font = font(12, scale=scale)
+        update_font = font(14, scale=scale)
         updated_label = _cluster_update_label(data.get("updated_at"))
         _text(draw, (left, y + height - 20), updated_label, "updated_at",
               fill=colors["muted"], font=update_font)

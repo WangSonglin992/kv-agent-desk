@@ -117,6 +117,7 @@ class ClusterRenderTests(unittest.TestCase):
         visible = {item["id"]: item for item in manifest}
         self.assertFalse(visible["cluster.stale_note"]["visible"])
         self.assertTrue(visible["cluster.checking"]["visible"])
+        self.assertGreaterEqual(visible["cluster.checking"]["default_font_size"], 14)
 
     def test_unknown_cached_numbers_remain_unknown_instead_of_becoming_zero(self):
         cluster = sample_cluster()
@@ -155,11 +156,11 @@ class ClusterRenderTests(unittest.TestCase):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
         stamp = datetime(2035, 1, 2, 12, 0).astimezone()
         cases = (
-            (100, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}, 15, 18),
-            (115, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}, 17, 18),
-            (115, {"margin": 64, "gap": 32, "account_width": 200, "top": 104, "bottom": 420}, 13, 13),
+            (100, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}),
+            (115, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}),
+            (115, {"margin": 64, "gap": 32, "account_width": 200, "top": 104, "bottom": 420}),
         )
-        for scale, geometry, expected_size, expected_step in cases:
+        for scale, geometry in cases:
             profile = {"layout": "classic", "font_scale": scale, "geometry": geometry}
             with self.subTest(scale=scale, geometry=geometry):
                 _, manifest = render_scene(snapshot, stamp, profile)
@@ -170,16 +171,39 @@ class ClusterRenderTests(unittest.TestCase):
                 gpu_row_cpu = nodes["cluster.node_2.cpu_value"]
                 gpu_row_memory = nodes["cluster.node_2.memory_value"]
                 gpu_row_gpu = nodes["cluster.node_2.gpu_value"]
-                self.assertGreaterEqual(cpu["default_font_size"], expected_size)
                 self.assertEqual(memory["default_font_size"], cpu["default_font_size"])
                 self.assertFalse(gpu["visible"])
-                self.assertEqual(gpu_row_cpu["default_font_size"], expected_size)
-                self.assertEqual(gpu_row_memory["default_font_size"], expected_size)
-                self.assertEqual(gpu_row_gpu["default_font_size"], expected_size)
-                self.assertEqual(gpu_row_memory["bbox"][1] - gpu_row_cpu["bbox"][1], expected_step)
-                self.assertEqual(gpu_row_gpu["bbox"][1] - gpu_row_memory["bbox"][1], expected_step)
-                self.assertEqual(nodes["cluster.node_1.name"]["default_font_size"], round(17 * scale / 100))
-                self.assertLessEqual(gpu_row_gpu["bbox"][3], nodes["cluster.node_2"]["bbox"][3])
+                for resource in (gpu_row_cpu, gpu_row_memory, gpu_row_gpu,
+                                 nodes["cluster.node_2.cpu_label"], nodes["cluster.node_2.memory_label"],
+                                 nodes["cluster.node_2.gpu_label"]):
+                    self.assertEqual(resource["default_font_size"], gpu_row_cpu["default_font_size"])
+                self.assertGreaterEqual(nodes["cluster.node_1.name"]["default_font_size"],
+                                        round(19 * scale / 100))
+                self.assertGreaterEqual(nodes["cluster.node_2.name"]["default_font_size"],
+                                        round(19 * scale / 100))
+                row = nodes["cluster.node_2"]["bbox"]
+                resource_ids = ("cpu_label", "cpu_value", "memory_label", "memory_value",
+                                "gpu_label", "gpu_value")
+                visible_resources = [nodes[f"cluster.node_2.{suffix}"] for suffix in resource_ids]
+                for resource in visible_resources:
+                    box = resource["bbox"]
+                    self.assertGreaterEqual(box[1], row[1])
+                    self.assertLessEqual(box[3], row[3])
+                for index, first in enumerate(visible_resources):
+                    for second in visible_resources[index + 1:]:
+                        self.assertFalse(_overlaps(first["bbox"], second["bbox"]))
+                if geometry["account_width"] == 240:
+                    self.assertGreaterEqual(cpu["default_font_size"], round(20 * scale / 100))
+                    self.assertGreater(gpu_row_cpu["default_font_size"], 15)
+                else:
+                    self.assertGreaterEqual(cpu["default_font_size"], 10)
+                if scale == 100:
+                    self.assertGreaterEqual(cpu["default_font_size"], 22)
+                    self.assertGreaterEqual(gpu_row_cpu["default_font_size"], 18)
+                    self.assertGreaterEqual(nodes["cluster.title"]["default_font_size"], 18)
+                    self.assertGreaterEqual(nodes["cluster.stale_note"]["default_font_size"], 14)
+                    self.assertGreaterEqual(nodes["cluster.updated_at"]["default_font_size"], 14)
+                    self.assertGreaterEqual(nodes["cluster.node_2.state"]["default_font_size"], 13)
 
     def test_cpu_only_rows_hide_only_explicit_known_zero_gpu_counters(self):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
@@ -311,6 +335,16 @@ class ClusterRenderTests(unittest.TestCase):
                         ])
                         self.assertTrue(nodes["cluster.title"]["visible"])
                         self.assertTrue(nodes["cluster.updated_at"]["visible"])
+                        self.assertGreaterEqual(nodes["cluster.title"]["default_font_size"],
+                                                round(18 * font_scale / 100))
+                        self.assertGreaterEqual(nodes["cluster.updated_at"]["default_font_size"],
+                                                round(14 * font_scale / 100))
+                        self.assertGreaterEqual(nodes["cluster.node_1"]["bbox"][1],
+                                                nodes["cluster.title"]["bbox"][3] + 2)
+                        self.assertGreaterEqual(nodes["cluster.node_1.name"]["default_font_size"],
+                                                round(19 * font_scale / 100))
+                        self.assertGreaterEqual(nodes["cluster.node_1.state"]["default_font_size"],
+                                                round(13 * font_scale / 100))
                         content_ids = ["cluster.title", "cluster.stale_note", "cluster.updated_at"]
                         for index in range(1, 5):
                             content_ids.extend(f"cluster.node_{index}.{suffix}" for suffix in (

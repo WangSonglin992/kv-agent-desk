@@ -2,7 +2,7 @@
 
 ## 0.10.1
 
-- Hide GPU rows for nodes confirmed to have no GPUs and enlarge their CPU and memory text across all three themes.
+- Hide GPU rows for nodes confirmed to have no GPUs, and enlarge all cluster text, including GPU nodes, status labels and update timestamps, across all three themes.
 - Color node status by allocated CPU: below 40% green, from 40% to below 70% yellow, and 70% or more red; unavailable or invalid states remain neutral.
 - Preserve existing layout element IDs, saved styles and cluster settings.
 
