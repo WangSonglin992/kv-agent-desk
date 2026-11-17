@@ -4,8 +4,8 @@
 
 ## 当前状态
 
-- 截至 2026-11-05，正式版本为 [v0.9.0](https://github.com/WangSonglin992/kv-agent-desk/releases/tag/v0.9.0)，功能源码基线为 `ffd307a2680b76209036870e9095dea06507d05d`。本机已用官方 SHA-256 校验包更新到 `D:\APP\KV-Agent-Desk`。
-- 手动 CI `41989155287` 和正式发布 CI `41989629394` 均通过；手动 CI 运行 323 项测试、跳过 1 项，并验证三张动画图集确实嵌入 EXE、源/打包程序 smoke、四阶段安装选项记忆、卸载与数据保留。另用 Playwright 在合成演示页验证四角固定对角、CSS 缩放 75%/125%、父组偏移、取消、非法值、多选比例、保存与重新打开。
+- 截至 2026-11-17，正式版本为 [v0.10.0](https://github.com/WangSonglin992/kv-agent-desk/releases/tag/v0.10.0)，功能源码基线为 `6831b966b8aa302d538add2bc77f243c9f139461`。本机已用官方 SHA-256 校验包更新到 `D:\APP\KV-Agent-Desk`。
+- 手动 CI `44061253254` 和正式发布 CI `44063999165` 均通过；手动 CI 运行 355 项测试、跳过 1 项，并验证资源嵌入、源/打包程序 smoke、四阶段安装选项记忆、卸载与数据保留。新增测试覆盖集群解析、完整四节点缓存、失败保留、配置/API 和三主题。合成浏览器页面验证模式双向切换、默认 60 秒、自定义间隔保存和未保存输入保护。
 - 本机验收确认程序版本与官方 EXE 哈希一致、配置指纹未变、全部自定义样式和当前选择保留、历史缓存仍在、启动恢复上次画面、USB 已连接。桌面快捷方式和 Run 登记均指向安装目录与同一用户数据目录。没有执行实际 Windows 重启，也没有公开用户资料或画面。
 - 安装器在 v0.7.5 已修复 PowerShell 快捷方式收尾超时、Inno 吞掉完成阶段错误和短/长路径别名比较问题。使用原生 Inno 处理受信任快捷方式，失败退出码为 73；旧失败 tag 不重写，v0.7.4 没有 Release。
 
@@ -21,6 +21,7 @@ KV/Trofeo Vision 9.16 使用 WinUSB VID:PID `0416:5408`。逻辑画布 1920×480
 - 任务数超过 3 个时标红为忙碌。v0.8.0 状态指示器使用 AI 娘：Codex 白发龙娘、ZCode 黑发持书形象、Antigravity 蓝紫猫耳形象。空闲、工作、忙碌分别使用不同帧组；空闲周期 4 秒并按默认 1Hz 推进，工作周期 2 秒、忙碌周期 0.65 秒，沿用快速刷新。unknown/offline 不播放假工作动画，素材不可用时回退原指示器。官方 logo 和状态小字保留。
 - v0.8.1 默认角色扩大为 144 像素，窄/短卡片自适应为 112–144 像素，图集为每帧 192 像素。角色独立放在右上区域，状态、任务、套餐与底部额度重新排布；保留全部语义 ID、独立偏移和数据字段，不自动重写用户副本。
 - v0.9.0 可选中角色，用侧栏 25–300% 比例或单选四角手柄等比例缩放；角点拖拽固定对角，Escape 取消本次拖动。百分比支持多选角色，文本和其它图形跳过；缩放和位置随副本保存。未设置 `scale_percent` 的旧布局仍是 100%，不会自动改写。
+- v0.10.0 右侧可选 DeepSeek 余额或集群资源。集群通过现有 SSH 别名从登录节点只读查询四个 Slurm 节点，显示 CPU、内存 GB、GPU 的已分配/总量与成功更新时间；默认 60 秒，可选 15–3600 秒并保存。失败沿用最近成功数据。真实连接信息只在本机设置，不进入源码或模板；规范见 `docs/CLUSTER-MONITOR.md`。
 - Antigravity 展示 Gemini 共享的 5 小时和周额度；Claude/GPT 独立额度组在此面板忽略。无数据或陈旧数据时保留最后可信值/画面并给低调检查提示。
 - DeepSeek 只显示右侧上下两张紧凑余额卡。无法可靠验证可用额度的 LiteLLM / 课题组 GLM 槽位不接入。ChatGPT 套餐规格/到期日保存在独立手填资料中；用户的月付套餐按月检查并手动更新，程序不会自动延长 `expires_at`。这与实时 5 小时/周额度读取无关。
 - ChatGPT 确实没有 5 小时限额时，由控制页的 `codex_no_five_hour_limit` 个人设置将该窗口固定显示为 100%；不要用 API 余额推算它。OpenAI API 剩余额度源尚未接入：只读测试能认证 API Key，但费用统计与旧余额接口没有提供可用余额，因此没有添加“三个账户选两个”的配置，也不能用 Costs 费用冒充余额。不要读取网页登录会话凭据来绕过这一限制。
@@ -34,6 +35,7 @@ KV/Trofeo Vision 9.16 使用 WinUSB VID:PID `0416:5408`。逻辑画布 1920×480
 | `agent_dashboard/app.py` | 应用启动、loopback API、数据刷新/合并、Setup lifecycle CLI 路由。 |
 | `agent_dashboard/adapters/` | Codex JSONL、ZCode SQLite、Antigravity 本机 language server 读取。 |
 | `agent_dashboard/accounts/` | DeepSeek 官方只读余额查询。 |
+| `agent_dashboard/cluster.py` | Slurm 只读 SSH 查询、四节点解析、单线程刷新与主机隔离缓存；配置和截图必须使用合成信息。 |
 | `agent_dashboard/retention.py` | 最后可信值和 stale 标记。 |
 | `agent_dashboard/ui_profiles.py`、`ui_elements.py`、`layout_editor.py`、`ui_scene.py`、`ui_fonts.py` | 三套内置 UI、元素编辑器、JSON profile 和本机字体映射。 |
 | `agent_dashboard/render.py`、`display.py` | 固定 LCD 画布及 WinUSB 帧写入。 |
@@ -52,6 +54,7 @@ KV/Trofeo Vision 9.16 使用 WinUSB VID:PID `0416:5408`。逻辑画布 1920×480
 - 用户数据自 v0.6.2 起放在用户主目录，原因是打包宿主与 Explorer 可能访问不同的 AppData 重定向目录；不要改回 `%LOCALAPPDATA%`。UI 的 `status_indicator` 仍保留原有语义 ID 和 shape 描述符。仅三个角色 ID 允许可选的 `scale_percent` 整数，元数据只在实际位图存在时标记可等比调整；不要把它开放给所有 shape 或任意图片路径。
 - 卸载应仅删除本应用的程序文件、快捷方式及 Run/install 登记，保留 `.kv-agent-desk` 中的历史、配置和样式。快捷方式由 Inno `[Icons]` 原生清理，不应在卸载 hook 启动 PowerShell/COM。
 - 迁移/安装验证限定读取 allowlist，使用数量、schema、metadata 或 hash 对账，不向输出写真实账户资料。当前 PC 保留性已实测；不要在 Setup stage、repo、日志或公开 handoff 复制任何运行数据。
+- `cluster-last-good.json` 纳入本机安装备份，只含节点资源与成功时间，连接别名仅保存在设置。新配置字段是 `right_panel_mode`、`cluster_ssh_host`、`cluster_refresh_seconds`；旧用户默认 accounts/空别名/60 秒。本机已选择集群模式并验证四个实时节点，原有设置值、订阅资料和样式保留。帧缓存身份包含模式及连接摘要，避免换源后恢复错误模块。
 
 ## 构建、预览与发布
 
