@@ -32,6 +32,7 @@ _PALETTES = {
         "codex": "#78E7C2", "zcode": "#F7BA71", "antigravity": "#9BB7FF",
         "working": "#78E7C2", "waiting": "#F7BA71", "idle": "#A4B8CD",
         "offline": "#718296", "unknown": "#A4B8CD", "busy": "#F06469",
+        "cluster_warning": "#E4C95B",
     },
     "aurora": {
         "background": "#080D1C", "surface": "#111A30", "surface_alt": "#0C1428",
@@ -39,6 +40,7 @@ _PALETTES = {
         "codex": "#79E9C4", "zcode": "#FFBD8B", "antigravity": "#B0A1FF",
         "working": "#79E9C4", "waiting": "#FFBD8B", "idle": "#99AAC4",
         "offline": "#7386A5", "unknown": "#99AAC4", "busy": "#FF7186",
+        "cluster_warning": "#E8CF68",
     },
     "paper": {
         "background": "#F4F1EB", "surface": "#FFFEFA", "surface_alt": "#F4F1EB",
@@ -46,6 +48,7 @@ _PALETTES = {
         "codex": "#157B69", "zcode": "#A5602D", "antigravity": "#5964AD",
         "working": "#157B69", "waiting": "#A5602D", "idle": "#66727A",
         "offline": "#7A837F", "unknown": "#7A837F", "busy": "#B44949",
+        "cluster_warning": "#8A6A00",
     },
 }
 
@@ -874,25 +877,75 @@ def _cluster_pair(allocated: object, total: object, *, memory: bool = False) -> 
     return pair + (" GB" if memory else "")
 
 
+def _cluster_numeric(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) and result >= 0 else None
+
+
+def _cluster_gpu_absent(node: dict) -> bool:
+    """Hide GPU detail only when both known counters explicitly report zero."""
+    allocated = _cluster_numeric(node.get("gpu_allocated"))
+    total = _cluster_numeric(node.get("gpu_total"))
+    return allocated == 0 and total == 0
+
+
+def _cluster_cpu_percent(node: dict) -> float | None:
+    allocated = _cluster_numeric(node.get("cpu_allocated"))
+    total = _cluster_numeric(node.get("cpu_total"))
+    if allocated is None or total is None or total <= 0 or allocated > total:
+        return None
+    return allocated / total * 100
+
+
+def _cluster_cpu_status_role(node: dict) -> str:
+    """Map valid CPU allocation to a theme role, with faults taking priority."""
+    _, state_role = _cluster_state(node)
+    if state_role in {"offline", "unknown"}:
+        return state_role
+    percent = _cluster_cpu_percent(node)
+    if percent is None:
+        return "unknown"
+    if percent < 40:
+        return "working"
+    if percent < 70:
+        return "waiting"
+    return "busy"
+
+
 def _cluster_resource_typography(draw: ImageDraw.ImageDraw | SceneCanvas,
-                                 row_height: float, scale: int) -> tuple[ImageFont.ImageFont, int]:
-    """Use 15px, 18px-pitch resource text when the node row has room."""
+                                 row_height: float, scale: int, *, gpu_visible: bool,
+                                 content_width: float, values: list[str]) -> tuple[ImageFont.ImageFont, int, int]:
+    """Fit larger CPU-only metrics and keep GPU rows at their existing scale."""
+    row_count = 3 if gpu_visible else 2
+    base_size = 15 if gpu_visible else 20
+    target_step = 18 if gpu_visible else 24
     start = 19
-    for size in range(15, 9, -1):
+    labels = ("CPU", "内存", "GPU")[:row_count]
+    for size in range(base_size, 7, -1):
         candidate = font(size, scale=scale)
-        boxes = [draw.textbbox((0, 0), sample, font=candidate)
-                 for sample in ("128/128", "等待数据", "内存")]
+        samples = list(labels) + values + ["等待数据"]
+        boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
         glyph_height = max(box[3] - box[1] for box in boxes)
         glyph_bottom = max(box[3] for box in boxes)
-        step = min(18, math.floor((row_height - start - glyph_bottom - 1) / 2))
-        if step >= glyph_height:
-            return candidate, step
-    candidate = font(10, scale=scale)
-    boxes = [draw.textbbox((0, 0), sample, font=candidate)
-             for sample in ("128/128", "等待数据", "内存")]
+        step = min(target_step, math.floor((row_height - start - glyph_bottom - 1) / (row_count - 1)))
+        label_width = max(draw.textlength(label, font=candidate) for label in labels)
+        value_width = max((draw.textlength(value, font=candidate) for value in values), default=0)
+        if step >= glyph_height and label_width + 8 + value_width <= content_width:
+            return candidate, step, start
+
+    candidate = font(8, scale=scale)
+    samples = list(labels) + values + ["等待数据"]
+    boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
     glyph_height = max(box[3] - box[1] for box in boxes)
-    step = max(glyph_height, min(18, math.floor((row_height - start - max(box[3] for box in boxes) - 1) / 2)))
-    return candidate, step
+    glyph_bottom = max(box[3] for box in boxes)
+    step = max(glyph_height, min(target_step,
+               math.floor((row_height - start - glyph_bottom - 1) / (row_count - 1))))
+    return candidate, step, start
 
 
 def _cluster_update_label(value: object) -> str:
@@ -907,23 +960,42 @@ def _cluster_update_label(value: object) -> str:
 
 def _cluster_state(data: dict) -> tuple[str, str]:
     raw = clean(data.get("state"))
-    value = raw.casefold()
-    labels = {
+    if not raw:
+        return "状态未知", "unknown"
+    states = {
         "idle": "空闲", "up": "在线", "allocated": "运行", "alloc": "运行",
         "mixed": "部分占用", "mix": "部分占用", "busy": "繁忙",
-        "down": "离线", "drain": "维护", "draining": "维护", "maint": "维护",
-        "unknown": "未知",
+        "down": "离线", "drain": "维护", "draining": "维护", "drained": "维护",
+        "maint": "维护", "maintenance": "维护", "fail": "故障", "failing": "故障",
+        "no_respond": "未响应", "not_responding": "未响应", "unknown": "未知",
+        "future": "未启用", "power_down": "关机", "powered_down": "已关机",
+        "powering_down": "关机中", "powering_up": "启动中", "reserved": "已预留",
+        "resv_del_hold": "预留待释放", "planned": "计划中", "completing": "完成中",
+        "perfctrs": "性能计数器",
     }
-    label = labels.get(value, raw[:16] if raw else "状态未知")
-    if value in {"down", "drain", "draining", "maint"}:
-        color_role = "offline"
-    elif value in {"allocated", "alloc", "mixed", "mix", "busy"}:
-        color_role = "working"
-    elif value in {"idle", "up"}:
-        color_role = "working"
-    else:
-        color_role = "unknown"
-    return label, color_role
+    fault_states = {
+        "down", "drain", "draining", "drained", "maint", "maintenance", "fail",
+        "failing", "no_respond", "not_responding", "future", "power_down",
+        "powered_down", "powering_down", "powering_up",
+    }
+    not_responding = raw.endswith("*")
+    tokens = [part.strip().casefold() for part in re.split(r"[+,]", raw.rstrip("*")) if part.strip()]
+    if not tokens:
+        return raw[:16], "unknown"
+    if not_responding:
+        return "未响应", "offline"
+    faults = [token for token in tokens if token in fault_states]
+    if faults:
+        return states[faults[0]], "offline"
+    if "unknown" in tokens:
+        return states["unknown"], "unknown"
+    if any(token not in states for token in tokens):
+        return raw[:16], "unknown"
+    primary = next((token for token in tokens if token in {
+        "idle", "up", "allocated", "alloc", "mixed", "mix", "busy", "reserved",
+        "resv_del_hold", "planned", "completing", "perfctrs",
+    }), tokens[0])
+    return states[primary], "working"
 
 
 def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
@@ -970,27 +1042,46 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
 
                 supplied_name = clean(supplied.get("name"))
                 node_name = supplied_name or f"node-{index + 1:02d}"
-                node_status, state_role = _cluster_state(supplied) if known and supplied else ("等待", "subtle")
-                name_font = font(15, True, scale=scale)
+                if known and supplied:
+                    node_status = _cluster_state(supplied)[0]
+                    state_role = _cluster_cpu_status_role(supplied)
+                else:
+                    node_status, state_role = "等待", "unknown"
+                state_color = colors["cluster_warning"] if state_role == "waiting" else colors[state_role]
+                name_font = font(17, True, scale=scale)
                 state_font = font(11, scale=scale)
                 state_x = row_right - 5 - draw.textlength(node_status, font=state_font)
                 _text(draw, (row_left, node_y + 1), short(draw, node_name, name_font,
                       max(28, state_x - row_left - 16)), "name", fill=colors["text"], font=name_font)
                 _shape(draw, "ellipse", (state_x - 12, node_y + 7, state_x - 6, node_y + 13),
-                       "state_dot", fill=colors[state_role])
+                       "state_dot", fill=state_color)
                 _text(draw, (state_x, node_y + 2), short(draw, node_status, state_font,
-                      max(18, row_right - state_x)), "state", fill=colors[state_role], font=state_font)
+                      max(18, row_right - state_x)), "state", fill=state_color, font=state_font)
 
                 resource_rows = (
                     ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
                     ("memory_label", "memory_value", "内存", "memory_allocated_mb", "memory_total_mb", True),
                     ("gpu_label", "gpu_value", "GPU", "gpu_allocated", "gpu_total", False),
                 )
-                resource_font, resource_step = _cluster_resource_typography(draw, node_height, scale)
+                hide_gpu = known and bool(supplied) and _cluster_gpu_absent(supplied)
+                active_rows = [row for row in resource_rows if row[0] not in {"gpu_label"} or not hide_gpu]
+                metric_values = []
+                for _, _, _, allocated_key, total_key, memory in active_rows:
+                    if known and supplied:
+                        metric_values.append(_cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
+                                                           memory=memory))
+                    else:
+                        metric_values.append("等待数据")
+                resource_font, resource_step, resource_start = _cluster_resource_typography(
+                    draw, node_height, scale, gpu_visible=not hide_gpu,
+                    content_width=row_right - row_left, values=metric_values)
+                active_count = len(active_rows)
                 for row_index, (label_slot, value_slot, label, allocated_key, total_key, memory) in enumerate(resource_rows):
-                    text_y = node_y + 19 + row_index * resource_step
+                    visible = not (label_slot == "gpu_label" and hide_gpu)
+                    effective_index = min(row_index, active_count - 1)
+                    text_y = node_y + resource_start + effective_index * resource_step
                     _text(draw, (row_left, text_y), label, label_slot,
-                          fill=colors["muted"], font=resource_font)
+                          fill=colors["muted"], font=resource_font, visible=visible)
                     if known and supplied:
                         metric_value = _cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
                                                      memory=memory)
@@ -998,7 +1089,7 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
                         metric_value = "等待数据"
                     value_width = draw.textlength(metric_value, font=resource_font)
                     _text(draw, (row_right - value_width, text_y), metric_value, value_slot,
-                          fill=colors["text"], font=resource_font)
+                          fill=colors["text"], font=resource_font, visible=visible)
 
         update_font = font(12, scale=scale)
         updated_label = _cluster_update_label(data.get("updated_at"))

@@ -93,6 +93,12 @@ class ClusterRenderTests(unittest.TestCase):
             self.assertTrue(nodes[f"cluster.node_{index}"]["visible"])
             self.assertTrue(nodes[f"cluster.node_{index}.name"]["visible"])
             self.assertTrue(nodes[f"cluster.node_{index}.state_dot"]["visible"])
+        for index in (1, 4):
+            self.assertFalse(nodes[f"cluster.node_{index}.gpu_label"]["visible"])
+            self.assertFalse(nodes[f"cluster.node_{index}.gpu_value"]["visible"])
+        for index in (2, 3):
+            self.assertTrue(nodes[f"cluster.node_{index}.gpu_label"]["visible"])
+            self.assertTrue(nodes[f"cluster.node_{index}.gpu_value"]["visible"])
 
     def test_unknown_without_cache_waits_instead_of_showing_zero_usage(self):
         cluster = {"known": False, "nodes": [], "updated_at": None,
@@ -115,10 +121,13 @@ class ClusterRenderTests(unittest.TestCase):
     def test_unknown_cached_numbers_remain_unknown_instead_of_becoming_zero(self):
         cluster = sample_cluster()
         cluster["known"] = False
-        _, text = self.record_cluster_text({"right_panel_mode": "cluster", "cluster": cluster})
+        manifest, text = self.record_cluster_text({"right_panel_mode": "cluster", "cluster": cluster})
         self.assertEqual(text["cluster.node_1.cpu_value"], "等待数据")
         self.assertEqual(text["cluster.node_1.memory_value"], "等待数据")
         self.assertEqual(text["cluster.node_1.gpu_value"], "等待数据")
+        visible = {item["id"]: item for item in manifest}
+        self.assertTrue(visible["cluster.node_1.gpu_label"]["visible"])
+        self.assertTrue(visible["cluster.node_1.gpu_value"]["visible"])
 
     def test_nested_node_group_position_and_text_style_overrides_apply(self):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
@@ -142,29 +151,134 @@ class ClusterRenderTests(unittest.TestCase):
         ])
         self.assertEqual(moved["cluster.node_1.name"]["font_size"], 21)
 
-    def test_resource_numbers_use_roomier_default_and_shrink_to_row_bounds(self):
+    def test_resource_numbers_use_roomier_cpu_only_rows_and_preserve_gpu_readability(self):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
         stamp = datetime(2035, 1, 2, 12, 0).astimezone()
         cases = (
             (100, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}, 15, 18),
             (115, {"margin": 24, "gap": 16, "account_width": 240, "top": 76, "bottom": 450}, 17, 18),
-            (115, {"margin": 64, "gap": 32, "account_width": 200, "top": 104, "bottom": 420}, 14, 13),
+            (115, {"margin": 64, "gap": 32, "account_width": 200, "top": 104, "bottom": 420}, 13, 13),
         )
         for scale, geometry, expected_size, expected_step in cases:
             profile = {"layout": "classic", "font_scale": scale, "geometry": geometry}
             with self.subTest(scale=scale, geometry=geometry):
                 _, manifest = render_scene(snapshot, stamp, profile)
                 nodes = {item["id"]: item for item in manifest}
-                row = nodes["cluster.node_4"]["bbox"]
-                cpu = nodes["cluster.node_4.cpu_value"]
-                memory = nodes["cluster.node_4.memory_value"]
-                gpu = nodes["cluster.node_4.gpu_value"]
-                self.assertEqual(cpu["default_font_size"], expected_size)
-                self.assertEqual(memory["default_font_size"], expected_size)
-                self.assertEqual(gpu["default_font_size"], expected_size)
-                self.assertEqual(memory["bbox"][1] - cpu["bbox"][1], expected_step)
-                self.assertEqual(gpu["bbox"][1] - memory["bbox"][1], expected_step)
-                self.assertLessEqual(gpu["bbox"][3], row[1] + row[3] - row[1])
+                cpu = nodes["cluster.node_1.cpu_value"]
+                memory = nodes["cluster.node_1.memory_value"]
+                gpu = nodes["cluster.node_1.gpu_value"]
+                gpu_row_cpu = nodes["cluster.node_2.cpu_value"]
+                gpu_row_memory = nodes["cluster.node_2.memory_value"]
+                gpu_row_gpu = nodes["cluster.node_2.gpu_value"]
+                self.assertGreaterEqual(cpu["default_font_size"], expected_size)
+                self.assertEqual(memory["default_font_size"], cpu["default_font_size"])
+                self.assertFalse(gpu["visible"])
+                self.assertEqual(gpu_row_cpu["default_font_size"], expected_size)
+                self.assertEqual(gpu_row_memory["default_font_size"], expected_size)
+                self.assertEqual(gpu_row_gpu["default_font_size"], expected_size)
+                self.assertEqual(gpu_row_memory["bbox"][1] - gpu_row_cpu["bbox"][1], expected_step)
+                self.assertEqual(gpu_row_gpu["bbox"][1] - gpu_row_memory["bbox"][1], expected_step)
+                self.assertEqual(nodes["cluster.node_1.name"]["default_font_size"], round(17 * scale / 100))
+                self.assertLessEqual(gpu_row_gpu["bbox"][3], nodes["cluster.node_2"]["bbox"][3])
+
+    def test_cpu_only_rows_hide_only_explicit_known_zero_gpu_counters(self):
+        snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
+        manifest, text = self.record_cluster_text(snapshot)
+        nodes = {item["id"]: item for item in manifest}
+        self.assertFalse(nodes["cluster.node_1.gpu_label"]["visible"])
+        self.assertFalse(nodes["cluster.node_1.gpu_value"]["visible"])
+        self.assertTrue(nodes["cluster.node_2.gpu_label"]["visible"])
+        self.assertEqual(text["cluster.node_2.gpu_value"], "2/4")
+        default_font = nodes["cluster.node_1.cpu_value"]["default_font_size"]
+        self.assertGreaterEqual(default_font, 20)
+
+        for unknown_gpu in (
+            {"gpu_allocated": None, "gpu_total": None},
+            {"gpu_allocated": 0, "gpu_total": None},
+            {"gpu_allocated": False, "gpu_total": 0},
+        ):
+            cluster = sample_cluster()
+            cluster["nodes"][0].update(unknown_gpu)
+            manifest, _ = self.record_cluster_text({"right_panel_mode": "cluster", "cluster": cluster})
+            nodes = {item["id"]: item for item in manifest}
+            self.assertTrue(nodes["cluster.node_1.gpu_label"]["visible"], unknown_gpu)
+            self.assertTrue(nodes["cluster.node_1.gpu_value"]["visible"], unknown_gpu)
+
+    def test_long_memory_values_fit_narrow_max_scale_rows_without_overlapping(self):
+        cluster = sample_cluster()
+        cluster["nodes"][0]["memory_allocated_mb"] = 123456789
+        cluster["nodes"][0]["memory_total_mb"] = 987654321
+        snapshot = {"right_panel_mode": "cluster", "cluster": cluster}
+        profiles = (
+            {"font_scale": 100},
+            {"font_scale": 115, "geometry": {"margin": 64, "gap": 32, "account_width": 200,
+                                               "top": 104, "bottom": 420}},
+        )
+        for profile in profiles:
+            manifest, text = self.record_cluster_text(snapshot, profile)
+            nodes = {item["id"]: item for item in manifest}
+            self.assertEqual(text["cluster.node_1.memory_value"], "120563.3/964506.2 GB")
+            row = nodes["cluster.node_1"]["bbox"]
+            for identity in ("name", "cpu_label", "cpu_value", "memory_label", "memory_value"):
+                box = nodes[f"cluster.node_1.{identity}"]["bbox"]
+                self.assertGreaterEqual(box[0], row[0], identity)
+                self.assertLessEqual(box[2], row[2], identity)
+                self.assertGreaterEqual(box[1], row[1], identity)
+                self.assertLessEqual(box[3], row[3], identity)
+            boxes = [nodes[f"cluster.node_1.{identity}"]["bbox"]
+                     for identity in ("name", "cpu_label", "cpu_value", "memory_label", "memory_value")]
+            for first_index, first in enumerate(boxes):
+                for second in boxes[first_index + 1:]:
+                    self.assertFalse(_overlaps(first, second), (profile, first, second))
+
+    def test_status_colors_follow_cpu_allocation_with_operational_fault_priority(self):
+        stamp = datetime(2035, 1, 2, 12, 0).astimezone()
+        thresholds = ((39.9, "working"), (40, "waiting"), (69.9, "waiting"),
+                      (70, "busy"), (100, "busy"))
+        original_shape = render_module._shape
+        for percent, role in thresholds:
+            node = {**sample_cluster()["nodes"][0], "cpu_allocated": percent,
+                    "cpu_total": 100, "state": "IDLE"}
+            for layout in ("classic", "aurora", "paper"):
+                snapshot = {"right_panel_mode": "cluster", "cluster": {
+                    "known": True, "stale": False, "nodes": [node]}}
+                dots = {}
+
+                def capture_shape(draw, primitive, xy, element, **kwargs):
+                    identity = draw._name(element)
+                    if identity.endswith(".state_dot"):
+                        dots[identity] = kwargs.get("fill")
+                    return original_shape(draw, primitive, xy, element, **kwargs)
+
+                with patch("agent_dashboard.render._shape", side_effect=capture_shape):
+                    _, manifest = render_scene(snapshot, stamp, {"layout": layout})
+                rendered_nodes = {item["id"]: item for item in manifest}
+                color_role = "cluster_warning" if role == "waiting" else role
+                expected = render_module._resolve_design({"layout": layout})["colors"][color_role]
+                self.assertEqual(rendered_nodes["cluster.node_1.state"]["default_color"], expected,
+                                 (percent, layout))
+                self.assertEqual(dots["cluster.node_1.state_dot"], expected, (percent, layout))
+
+        invalid_cases = (
+            ({"cpu_allocated": 0, "cpu_total": 0}, "IDLE", False, "unknown"),
+            ({"cpu_allocated": True, "cpu_total": 100}, "IDLE", False, "unknown"),
+            ({"cpu_allocated": 10, "cpu_total": True}, "IDLE", False, "unknown"),
+            ({"cpu_allocated": 20, "cpu_total": 100}, "IDLE+DRAIN", False, "offline"),
+            ({"cpu_allocated": 20, "cpu_total": 100}, "MYSTERY", False, "unknown"),
+            ({"cpu_allocated": 90, "cpu_total": 100}, "IDLE", True, "busy"),
+        )
+        for metrics, state, stale, role in invalid_cases:
+            with self.subTest(metrics=metrics, state=state, stale=stale):
+                node = {**sample_cluster()["nodes"][0], **metrics, "state": state}
+                snapshot = {"right_panel_mode": "cluster", "cluster": {
+                    "known": True, "stale": stale, "nodes": [node]}}
+                _, text = self.record_cluster_text(snapshot)
+                self.assertEqual(text["cluster.node_1.state"], "维护" if state == "IDLE+DRAIN"
+                                 else ("空闲" if state == "IDLE" else state[:16]))
+                _, manifest = render_scene(snapshot, stamp)
+                nodes = {item["id"]: item for item in manifest}
+                expected = render_module._resolve_design(None)["colors"][role]
+                self.assertEqual(nodes["cluster.node_1.state"]["default_color"], expected)
 
     def test_resource_formatting_handles_zero_and_gigabyte_precision(self):
         self.assertEqual(_cluster_number(0), "0")
