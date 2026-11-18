@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.2
+
+- Use one shared resource font size across all four cluster nodes, regardless of GPU presence; fit long numbers and constrained layouts as a group.
+- Keep GPU-free rows hidden, CPU allocation colors, stable element IDs and saved appearance overrides.
+
 ## 0.10.1
 
 - Hide GPU rows for nodes confirmed to have no GPUs, and enlarge all cluster text, including GPU nodes, status labels and update timestamps, across all three themes.

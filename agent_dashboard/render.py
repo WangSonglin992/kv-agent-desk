@@ -918,41 +918,35 @@ def _cluster_cpu_status_role(node: dict) -> str:
 
 
 def _cluster_resource_typography(draw: ImageDraw.ImageDraw | SceneCanvas,
-                                 row_height: float, scale: int, *, gpu_visible: bool,
+                                 row_heights: list[int], scale: int, *,
                                  content_width: float, values: list[str],
                                  header_bottom: int) -> tuple[ImageFont.ImageFont, int, int]:
-    """Fit enlarged resource text to each node row and its available width."""
-    row_count = 3 if gpu_visible else 2
-    base_size = 18 if gpu_visible else 22
-    target_step = 18 if gpu_visible else 26
+    """Choose one resource font and baseline grid that fits every node row."""
+    labels = ("CPU", "内存", "GPU")
     start = 19
-    labels = ("CPU", "内存", "GPU")[:row_count]
-    for size in range(base_size, 7, -1):
+    target_step = 18
+    for size in range(22, 7, -1):
         candidate = font(size, scale=scale)
-        samples = list(labels) + values
-        if "等待数据" in values:
-            samples.append("等待数据")
-        boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
+        boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in (*labels, *values)]
         glyph_height = max(box[3] - box[1] for box in boxes)
         glyph_bottom = max(box[3] for box in boxes)
         resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
-        step = min(target_step, math.floor((row_height - resource_start - glyph_bottom - 1)
-                                           / (row_count - 1)))
+        available_steps = [math.floor((row_height - resource_start - glyph_bottom - 1) / 2)
+                           for row_height in row_heights]
+        step = min(target_step, *available_steps)
         label_width = max(draw.textlength(label, font=candidate) for label in labels)
         value_width = max((draw.textlength(value, font=candidate) for value in values), default=0)
         if step >= glyph_height and label_width + 8 + value_width <= content_width:
             return candidate, step, resource_start
 
     candidate = font(8, scale=scale)
-    samples = list(labels) + values
-    if "等待数据" in values:
-        samples.append("等待数据")
-    boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in samples]
+    boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in (*labels, *values)]
     glyph_height = max(box[3] - box[1] for box in boxes)
     glyph_bottom = max(box[3] for box in boxes)
     resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
-    step = max(glyph_height, min(target_step,
-               math.floor((row_height - resource_start - glyph_bottom - 1) / (row_count - 1))))
+    available_steps = [math.floor((row_height - resource_start - glyph_bottom - 1) / 2)
+                       for row_height in row_heights]
+    step = max(glyph_height, min(target_step, *available_steps))
     return candidate, step, resource_start
 
 
@@ -1045,62 +1039,74 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
         row_start_offset = max(34, header_bottom - y + 2)
         row_start = y + row_start_offset
         row_height = (height - row_start_offset - 28) / 4
+        row_left, row_right = x + 13, x + width - 13
+        name_font = font(19, True, scale=scale)
+        node_state_font = font(13, scale=scale)
+        resource_rows = (
+            ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
+            ("memory_label", "memory_value", "内存", "memory_allocated_mb", "memory_total_mb", True),
+            ("gpu_label", "gpu_value", "GPU", "gpu_allocated", "gpu_total", False),
+        )
+        node_rows = []
+        resource_values = []
         for index in range(4):
             node_id = f"cluster.node_{index + 1}"
             node_y = round(row_start + index * row_height)
             node_bottom = round(row_start + (index + 1) * row_height) - 1
             node_height = max(1, node_bottom - node_y)
             supplied = nodes[index] if index < len(nodes) and isinstance(nodes[index], dict) else {}
+            supplied_name = clean(supplied.get("name"))
+            node_name = supplied_name or f"node-{index + 1:02d}"
+            if known and supplied:
+                node_status = _cluster_state(supplied)[0]
+                state_role = _cluster_cpu_status_role(supplied)
+            else:
+                node_status, state_role = "等待", "unknown"
+            state_color = colors["cluster_warning"] if state_role == "waiting" else colors[state_role]
+            state_x = row_right - 5 - draw.textlength(node_status, font=node_state_font)
+            name_text = short(draw, node_name, name_font, max(28, state_x - row_left - 16))
+            state_text = short(draw, node_status, node_state_font, max(18, row_right - state_x))
+            name_y = node_y - 2
+            name_box = draw.textbbox((row_left, name_y), str(name_text), font=name_font)
+            state_box = draw.textbbox((state_x, node_y + 2), str(state_text), font=node_state_font)
+            row_header_bottom = max(name_box[3], state_box[3]) - node_y
+            hide_gpu = known and bool(supplied) and _cluster_gpu_absent(supplied)
+            for label_slot, _, _, allocated_key, total_key, memory in resource_rows:
+                if label_slot == "gpu_label" and hide_gpu:
+                    continue
+                if known and supplied:
+                    resource_values.append(_cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
+                                                         memory=memory))
+                else:
+                    resource_values.append("等待数据")
+            node_rows.append({
+                "node_id": node_id, "node_y": node_y, "node_height": node_height,
+                "supplied": supplied, "name_text": name_text, "name_y": name_y,
+                "state_x": state_x, "state_text": state_text, "state_color": state_color,
+                "hide_gpu": hide_gpu, "header_bottom": row_header_bottom,
+            })
+
+        resource_font, resource_step, resource_start = _cluster_resource_typography(
+            draw, [row["node_height"] for row in node_rows], scale,
+            content_width=row_right - row_left, values=resource_values,
+            header_bottom=max(row["header_bottom"] for row in node_rows))
+
+        for row in node_rows:
+            node_id, node_y = row["node_id"], row["node_y"]
+            node_height, supplied = row["node_height"], row["supplied"]
             with draw.group(node_id, (x + 8, node_y, x + width - 8, node_y + node_height)):
-                row_left, row_right = x + 13, x + width - 13
                 _shape(draw, "rounded_rectangle", (x + 8, node_y, x + width - 8, node_y + node_height),
                        "panel", radius=5, fill=colors["surface_alt"])
-
-                supplied_name = clean(supplied.get("name"))
-                node_name = supplied_name or f"node-{index + 1:02d}"
-                if known and supplied:
-                    node_status = _cluster_state(supplied)[0]
-                    state_role = _cluster_cpu_status_role(supplied)
-                else:
-                    node_status, state_role = "等待", "unknown"
-                state_color = colors["cluster_warning"] if state_role == "waiting" else colors[state_role]
-                name_font = font(19, True, scale=scale)
-                state_font = font(13, scale=scale)
-                state_x = row_right - 5 - draw.textlength(node_status, font=state_font)
-                name_text = short(draw, node_name, name_font, max(28, state_x - row_left - 16))
-                state_text = short(draw, node_status, state_font, max(18, row_right - state_x))
-                name_y = node_y - 2
-                _text(draw, (row_left, name_y), name_text, "name", fill=colors["text"], font=name_font)
-                _shape(draw, "ellipse", (state_x - 12, node_y + 7, state_x - 6, node_y + 13),
-                       "state_dot", fill=state_color)
-                _text(draw, (state_x, node_y + 2), state_text, "state", fill=state_color, font=state_font)
-                name_box = draw.textbbox((row_left, name_y), str(name_text), font=name_font)
-                state_box = draw.textbbox((state_x, node_y + 2), str(state_text), font=state_font)
-                header_bottom = max(name_box[3], state_box[3]) - node_y
-
-                resource_rows = (
-                    ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
-                    ("memory_label", "memory_value", "内存", "memory_allocated_mb", "memory_total_mb", True),
-                    ("gpu_label", "gpu_value", "GPU", "gpu_allocated", "gpu_total", False),
-                )
-                hide_gpu = known and bool(supplied) and _cluster_gpu_absent(supplied)
-                active_rows = [row for row in resource_rows if row[0] not in {"gpu_label"} or not hide_gpu]
-                metric_values = []
-                for _, _, _, allocated_key, total_key, memory in active_rows:
-                    if known and supplied:
-                        metric_values.append(_cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
-                                                           memory=memory))
-                    else:
-                        metric_values.append("等待数据")
-                resource_font, resource_step, resource_start = _cluster_resource_typography(
-                    draw, node_height, scale, gpu_visible=not hide_gpu,
-                    content_width=row_right - row_left, values=metric_values,
-                    header_bottom=header_bottom)
-                active_count = len(active_rows)
+                _text(draw, (row_left, row["name_y"]), row["name_text"], "name",
+                      fill=colors["text"], font=name_font)
+                _shape(draw, "ellipse", (row["state_x"] - 12, node_y + 7,
+                                          row["state_x"] - 6, node_y + 13),
+                       "state_dot", fill=row["state_color"])
+                _text(draw, (row["state_x"], node_y + 2), row["state_text"], "state",
+                      fill=row["state_color"], font=node_state_font)
                 for row_index, (label_slot, value_slot, label, allocated_key, total_key, memory) in enumerate(resource_rows):
-                    visible = not (label_slot == "gpu_label" and hide_gpu)
-                    effective_index = min(row_index, active_count - 1)
-                    text_y = node_y + resource_start + effective_index * resource_step
+                    visible = not (label_slot == "gpu_label" and row["hide_gpu"])
+                    text_y = node_y + resource_start + row_index * resource_step
                     _text(draw, (row_left, text_y), label, label_slot,
                           fill=colors["muted"], font=resource_font, visible=visible)
                     if known and supplied:

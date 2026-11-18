@@ -56,6 +56,20 @@ class ClusterRenderTests(unittest.TestCase):
             _, manifest = render_scene(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), profile)
         return manifest, text_values
 
+    def assert_shared_resource_grid(self, nodes: dict[str, dict]) -> int:
+        resource_suffixes = ("cpu_label", "cpu_value", "memory_label", "memory_value",
+                             "gpu_label", "gpu_value")
+        resources = [nodes[f"cluster.node_{index}.{suffix}"]
+                     for index in range(1, 5) for suffix in resource_suffixes]
+        sizes = {item["default_font_size"] for item in resources}
+        self.assertEqual(len(sizes), 1, "all resource labels and values share one default size")
+        for suffix in resource_suffixes:
+            offsets = [nodes[f"cluster.node_{index}.{suffix}"]["default_bbox"][1]
+                       - nodes[f"cluster.node_{index}"]["default_bbox"][1]
+                       for index in range(1, 5)]
+            self.assertEqual(len(set(offsets)), 1, f"{suffix} baselines align across nodes")
+        return next(iter(sizes))
+
     def test_cluster_slots_are_registered_under_nested_node_groups(self):
         self.assertEqual(ELEMENT_DEFINITIONS["cluster"]["kind"], "group")
         self.assertIsNone(ELEMENT_DEFINITIONS["cluster"]["parent"])
@@ -85,6 +99,7 @@ class ClusterRenderTests(unittest.TestCase):
         self.assertNotIn("12:39", text["cluster.updated_at"])
 
         nodes = {item["id"]: item for item in manifest}
+        self.assertEqual(self.assert_shared_resource_grid(nodes), 18)
         self.assertTrue(nodes["cluster" ]["visible"])
         self.assertTrue(nodes["cluster.panel"]["visible"])
         self.assertTrue(nodes["cluster.stale_note"]["visible"])
@@ -115,6 +130,7 @@ class ClusterRenderTests(unittest.TestCase):
             self.assertEqual(text[f"cluster.node_{index}.gpu_value"], "等待数据")
             self.assertEqual(text[f"cluster.node_{index}.state"], "等待")
         visible = {item["id"]: item for item in manifest}
+        self.assert_shared_resource_grid(visible)
         self.assertFalse(visible["cluster.stale_note"]["visible"])
         self.assertTrue(visible["cluster.checking"]["visible"])
         self.assertGreaterEqual(visible["cluster.checking"]["default_font_size"], 14)
@@ -127,6 +143,7 @@ class ClusterRenderTests(unittest.TestCase):
         self.assertEqual(text["cluster.node_1.memory_value"], "等待数据")
         self.assertEqual(text["cluster.node_1.gpu_value"], "等待数据")
         visible = {item["id"]: item for item in manifest}
+        self.assert_shared_resource_grid(visible)
         self.assertTrue(visible["cluster.node_1.gpu_label"]["visible"])
         self.assertTrue(visible["cluster.node_1.gpu_value"]["visible"])
 
@@ -152,7 +169,7 @@ class ClusterRenderTests(unittest.TestCase):
         ])
         self.assertEqual(moved["cluster.node_1.name"]["font_size"], 21)
 
-    def test_resource_numbers_use_roomier_cpu_only_rows_and_preserve_gpu_readability(self):
+    def test_resource_numbers_share_one_size_and_baseline_across_heterogeneous_rows(self):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
         stamp = datetime(2035, 1, 2, 12, 0).astimezone()
         cases = (
@@ -171,7 +188,10 @@ class ClusterRenderTests(unittest.TestCase):
                 gpu_row_cpu = nodes["cluster.node_2.cpu_value"]
                 gpu_row_memory = nodes["cluster.node_2.memory_value"]
                 gpu_row_gpu = nodes["cluster.node_2.gpu_value"]
+                shared_size = self.assert_shared_resource_grid(nodes)
                 self.assertEqual(memory["default_font_size"], cpu["default_font_size"])
+                if scale == 100 and geometry["account_width"] == 240 and geometry["top"] == 76:
+                    self.assertEqual(shared_size, 18)
                 self.assertFalse(gpu["visible"])
                 for resource in (gpu_row_cpu, gpu_row_memory, gpu_row_gpu,
                                  nodes["cluster.node_2.cpu_label"], nodes["cluster.node_2.memory_label"],
@@ -193,13 +213,11 @@ class ClusterRenderTests(unittest.TestCase):
                     for second in visible_resources[index + 1:]:
                         self.assertFalse(_overlaps(first["bbox"], second["bbox"]))
                 if geometry["account_width"] == 240:
-                    self.assertGreaterEqual(cpu["default_font_size"], round(20 * scale / 100))
-                    self.assertGreater(gpu_row_cpu["default_font_size"], 15)
+                    self.assertGreaterEqual(shared_size, 10)
                 else:
-                    self.assertGreaterEqual(cpu["default_font_size"], 10)
+                    self.assertGreaterEqual(shared_size, 10)
+                    self.assertLess(shared_size, 18)
                 if scale == 100:
-                    self.assertGreaterEqual(cpu["default_font_size"], 22)
-                    self.assertGreaterEqual(gpu_row_cpu["default_font_size"], 18)
                     self.assertGreaterEqual(nodes["cluster.title"]["default_font_size"], 18)
                     self.assertGreaterEqual(nodes["cluster.stale_note"]["default_font_size"], 14)
                     self.assertGreaterEqual(nodes["cluster.updated_at"]["default_font_size"], 14)
@@ -209,12 +227,12 @@ class ClusterRenderTests(unittest.TestCase):
         snapshot = {"right_panel_mode": "cluster", "cluster": sample_cluster()}
         manifest, text = self.record_cluster_text(snapshot)
         nodes = {item["id"]: item for item in manifest}
+        self.assertEqual(self.assert_shared_resource_grid(nodes), 18)
         self.assertFalse(nodes["cluster.node_1.gpu_label"]["visible"])
         self.assertFalse(nodes["cluster.node_1.gpu_value"]["visible"])
         self.assertTrue(nodes["cluster.node_2.gpu_label"]["visible"])
         self.assertEqual(text["cluster.node_2.gpu_value"], "2/4")
-        default_font = nodes["cluster.node_1.cpu_value"]["default_font_size"]
-        self.assertGreaterEqual(default_font, 20)
+        self.assertEqual(nodes["cluster.node_1.cpu_value"]["default_font_size"], 18)
 
         for unknown_gpu in (
             {"gpu_allocated": None, "gpu_total": None},
@@ -225,6 +243,7 @@ class ClusterRenderTests(unittest.TestCase):
             cluster["nodes"][0].update(unknown_gpu)
             manifest, _ = self.record_cluster_text({"right_panel_mode": "cluster", "cluster": cluster})
             nodes = {item["id"]: item for item in manifest}
+            self.assertEqual(self.assert_shared_resource_grid(nodes), 18)
             self.assertTrue(nodes["cluster.node_1.gpu_label"]["visible"], unknown_gpu)
             self.assertTrue(nodes["cluster.node_1.gpu_value"]["visible"], unknown_gpu)
 
@@ -241,6 +260,8 @@ class ClusterRenderTests(unittest.TestCase):
         for profile in profiles:
             manifest, text = self.record_cluster_text(snapshot, profile)
             nodes = {item["id"]: item for item in manifest}
+            shared_size = self.assert_shared_resource_grid(nodes)
+            self.assertLess(shared_size, 18)
             self.assertEqual(text["cluster.node_1.memory_value"], "120563.3/964506.2 GB")
             row = nodes["cluster.node_1"]["bbox"]
             for identity in ("name", "cpu_label", "cpu_value", "memory_label", "memory_value"):
@@ -328,6 +349,11 @@ class ClusterRenderTests(unittest.TestCase):
                     with self.subTest(layout=layout, geometry=geometry, font_scale=font_scale):
                         _, manifest = render_scene(snapshot, datetime(2035, 1, 2, 12, 0).astimezone(), profile)
                         nodes = {item["id"]: item for item in manifest}
+                        self.assert_shared_resource_grid(nodes)
+                        for suffix in ("name", "state"):
+                            sizes = {nodes[f"cluster.node_{index}.{suffix}"]["default_font_size"]
+                                     for index in range(1, 5)}
+                            self.assertEqual(len(sizes), 1, f"{suffix} role remains consistent")
                         panel = nodes["cluster"]["bbox"]
                         self.assertEqual(panel, [
                             1920 - geometry["margin"] - geometry["account_width"],
