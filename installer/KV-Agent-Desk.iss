@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.10.2"
+  #define AppVersion "0.10.3"
 #endif
 #define SetupPayload GetEnv("KV_SETUP_PAYLOAD")
 

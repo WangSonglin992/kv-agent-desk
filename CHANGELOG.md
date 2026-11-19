@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.3
+
+- Reflow the cluster panel into evenly spaced rows with fixed 20px text, bold node headings, CPU/GPU columns and a separate memory row.
+- Show two-character allocation states: green 空闲, yellow 负载 and red 忙碌, with larger status dots; faults and unknown data remain neutral.
+- Retain GPU-free visibility, stable element IDs, local configuration and saved layouts.
+
 ## 0.10.2
 
 - Use one shared resource font size across all four cluster nodes, regardless of GPU presence; fit long numbers and constrained layouts as a group.

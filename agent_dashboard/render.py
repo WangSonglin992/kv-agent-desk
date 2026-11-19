@@ -917,37 +917,15 @@ def _cluster_cpu_status_role(node: dict) -> str:
     return "busy"
 
 
-def _cluster_resource_typography(draw: ImageDraw.ImageDraw | SceneCanvas,
-                                 row_heights: list[int], scale: int, *,
-                                 content_width: float, values: list[str],
-                                 header_bottom: int) -> tuple[ImageFont.ImageFont, int, int]:
-    """Choose one resource font and baseline grid that fits every node row."""
-    labels = ("CPU", "内存", "GPU")
-    start = 19
-    target_step = 18
-    for size in range(22, 7, -1):
-        candidate = font(size, scale=scale)
-        boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in (*labels, *values)]
-        glyph_height = max(box[3] - box[1] for box in boxes)
-        glyph_bottom = max(box[3] for box in boxes)
-        resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
-        available_steps = [math.floor((row_height - resource_start - glyph_bottom - 1) / 2)
-                           for row_height in row_heights]
-        step = min(target_step, *available_steps)
-        label_width = max(draw.textlength(label, font=candidate) for label in labels)
-        value_width = max((draw.textlength(value, font=candidate) for value in values), default=0)
-        if step >= glyph_height and label_width + 8 + value_width <= content_width:
-            return candidate, step, resource_start
-
-    candidate = font(8, scale=scale)
-    boxes = [draw.textbbox((0, 0), sample, font=candidate) for sample in (*labels, *values)]
-    glyph_height = max(box[3] - box[1] for box in boxes)
-    glyph_bottom = max(box[3] for box in boxes)
-    resource_start = max(start, header_bottom + 1 - min(box[1] for box in boxes))
-    available_steps = [math.floor((row_height - resource_start - glyph_bottom - 1) / 2)
-                       for row_height in row_heights]
-    step = max(glyph_height, min(target_step, *available_steps))
-    return candidate, step, resource_start
+def _cluster_line_grid(draw: ImageDraw.ImageDraw | SceneCanvas, height: int,
+                       text_font: ImageFont.ImageFont) -> tuple[int, int]:
+    """Center fourteen fixed-size cluster text lines on one even grid."""
+    samples = ("集群资源", "CPU", "内存", "GPU", "1024/1024", "待查", "等待数据", "空闲")
+    glyph_height = max(draw.textbbox((0, 0), value, font=text_font, anchor="lt")[3]
+                       for value in samples)
+    pitch = min(26, max(24, math.floor((height - glyph_height) / 13)))
+    block_height = 13 * pitch + glyph_height
+    return pitch, max(0, (height - block_height) // 2)
 
 
 def _cluster_update_label(value: object) -> str:
@@ -963,41 +941,48 @@ def _cluster_update_label(value: object) -> str:
 def _cluster_state(data: dict) -> tuple[str, str]:
     raw = clean(data.get("state"))
     if not raw:
-        return "状态未知", "unknown"
-    states = {
-        "idle": "空闲", "up": "在线", "allocated": "运行", "alloc": "运行",
-        "mixed": "部分占用", "mix": "部分占用", "busy": "繁忙",
-        "down": "离线", "drain": "维护", "draining": "维护", "drained": "维护",
-        "maint": "维护", "maintenance": "维护", "fail": "故障", "failing": "故障",
-        "no_respond": "未响应", "not_responding": "未响应", "unknown": "未知",
-        "future": "未启用", "power_down": "关机", "powered_down": "已关机",
-        "powering_down": "关机中", "powering_up": "启动中", "reserved": "已预留",
-        "resv_del_hold": "预留待释放", "planned": "计划中", "completing": "完成中",
-        "perfctrs": "性能计数器",
-    }
-    fault_states = {
-        "down", "drain", "draining", "drained", "maint", "maintenance", "fail",
-        "failing", "no_respond", "not_responding", "future", "power_down",
+        return "未知", "unknown"
+    valid_states = {
+        "idle", "up", "allocated", "alloc", "mixed", "mix", "busy", "reserved",
+        "resv_del_hold", "planned", "completing", "perfctrs", "down", "drain",
+        "draining", "drained", "maint", "maintenance", "fail", "failing",
+        "no_respond", "not_responding", "unknown", "future", "power_down",
         "powered_down", "powering_down", "powering_up",
     }
+    maintenance_states = {"drain", "draining", "drained", "maint", "maintenance"}
+    offline_states = {
+        "down", "future", "power_down", "powered_down", "powering_down", "powering_up",
+        "no_respond", "not_responding",
+    }
+    failure_states = {"fail", "failing"}
     not_responding = raw.endswith("*")
     tokens = [part.strip().casefold() for part in re.split(r"[+,]", raw.rstrip("*")) if part.strip()]
     if not tokens:
-        return raw[:16], "unknown"
-    if not_responding:
-        return "未响应", "offline"
-    faults = [token for token in tokens if token in fault_states]
-    if faults:
-        return states[faults[0]], "offline"
+        return "未知", "unknown"
+    if not_responding or any(token in offline_states for token in tokens):
+        return "离线", "offline"
+    if any(token in failure_states for token in tokens):
+        return "故障", "offline"
+    if any(token in maintenance_states for token in tokens):
+        return "维护", "offline"
     if "unknown" in tokens:
-        return states["unknown"], "unknown"
-    if any(token not in states for token in tokens):
-        return raw[:16], "unknown"
-    primary = next((token for token in tokens if token in {
-        "idle", "up", "allocated", "alloc", "mixed", "mix", "busy", "reserved",
-        "resv_del_hold", "planned", "completing", "perfctrs",
-    }), tokens[0])
-    return states[primary], "working"
+        return "未知", "unknown"
+    if any(token not in valid_states for token in tokens):
+        return "未知", "unknown"
+    return "空闲", "working"
+
+
+def _cluster_node_status(node: dict, *, known: bool) -> tuple[str, str]:
+    """Return a truthful two-character label and its theme role."""
+    if not known or not node:
+        return "等待", "unknown"
+    state_label, state_role = _cluster_state(node)
+    if state_role in {"offline", "unknown"}:
+        return state_label, state_role
+    role = _cluster_cpu_status_role(node)
+    if role == "unknown":
+        return "未知", role
+    return {"working": "空闲", "waiting": "负载", "busy": "忙碌"}[role], role
 
 
 def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
@@ -1007,121 +992,131 @@ def draw_cluster_panel(draw: ImageDraw.ImageDraw | SceneCanvas, data: dict,
     design = _resolve_design(profile)
     if not isinstance(draw, SceneCanvas):
         draw = SceneCanvas(None, design, draw=draw, prefix="cluster")
-    colors, scale, layout = design["colors"], design["font_scale"], design["layout"]
+    colors = design["colors"]
     known = data.get("known") is True
     stale = bool(data.get("stale"))
     checking = bool(data.get("checking"))
     nodes = data.get("nodes") if isinstance(data.get("nodes"), list) else []
+    regular_font = font(20)
+    bold_font = font(20, True)
+    pitch, inset = _cluster_line_grid(draw, height, regular_font)
+    grid_top = y + inset
+    line_y = lambda index: grid_top + index * pitch
+
+    def ink_width(value: str, text_font: ImageFont.ImageFont = regular_font) -> int:
+        bounds = draw.textbbox((0, 0), value, font=text_font, anchor="lt")
+        return math.ceil(bounds[2] - min(0, bounds[0]))
 
     with draw.group("cluster", (x, y, x + width, y + height)):
         _card(draw, x, y, width, height, design, "cluster", account=True)
-        header_font = font(18, True, scale=scale)
-        status_font = font(14, scale=scale)
         left, right = x + 14, x + width - 14
-        _text(draw, (left, y + 10), "集群资源", "title", fill=colors["text"], font=header_font)
+        header_y = line_y(0)
+        _text(draw, (left, header_y), "集群资源", "title", fill=colors["text"],
+              font=bold_font, anchor="lt")
 
-        stale_text = "待检查更新" if stale else ""
-        checking_text = "检查中" if checking and not stale else ""
+        stale_text = "待查" if stale else ""
+        checking_text = "检查" if checking and not stale else ""
         status_text = stale_text or checking_text
-        status_x = right - draw.textlength(status_text, font=status_font)
-        _text(draw, (status_x, y + 12), stale_text, "stale_note", fill=colors["subtle"],
-              font=status_font, visible=bool(stale_text))
-        _text(draw, (status_x, y + 12), checking_text, "checking", fill=colors["muted"],
-              font=status_font, visible=bool(checking_text))
+        status_x = right - draw.textlength(status_text, font=regular_font)
+        _text(draw, (status_x, header_y), stale_text, "stale_note", fill=colors["subtle"],
+              font=regular_font, anchor="lt", visible=bool(stale_text))
+        _text(draw, (status_x, header_y), checking_text, "checking", fill=colors["muted"],
+              font=regular_font, anchor="lt", visible=bool(checking_text))
 
-        header_bottom = draw.textbbox((left, y + 10), "集群资源", font=header_font)[3]
-        if stale_text:
-            header_bottom = max(header_bottom, draw.textbbox((status_x, y + 12), stale_text,
-                                                               font=status_font)[3])
-        elif checking_text:
-            header_bottom = max(header_bottom, draw.textbbox((status_x, y + 12), checking_text,
-                                                               font=status_font)[3])
-        row_start_offset = max(34, header_bottom - y + 2)
-        row_start = y + row_start_offset
-        row_height = (height - row_start_offset - 28) / 4
         row_left, row_right = x + 13, x + width - 13
-        name_font = font(19, True, scale=scale)
-        node_state_font = font(13, scale=scale)
-        resource_rows = (
-            ("cpu_label", "cpu_value", "CPU", "cpu_allocated", "cpu_total", False),
-            ("memory_label", "memory_value", "内存", "memory_allocated_mb", "memory_total_mb", True),
-            ("gpu_label", "gpu_value", "GPU", "gpu_allocated", "gpu_total", False),
-        )
-        node_rows = []
-        resource_values = []
+        content_width = row_right - row_left
+        node_rows: list[dict] = []
         for index in range(4):
             node_id = f"cluster.node_{index + 1}"
-            node_y = round(row_start + index * row_height)
-            node_bottom = round(row_start + (index + 1) * row_height) - 1
-            node_height = max(1, node_bottom - node_y)
             supplied = nodes[index] if index < len(nodes) and isinstance(nodes[index], dict) else {}
             supplied_name = clean(supplied.get("name"))
             node_name = supplied_name or f"node-{index + 1:02d}"
-            if known and supplied:
-                node_status = _cluster_state(supplied)[0]
-                state_role = _cluster_cpu_status_role(supplied)
-            else:
-                node_status, state_role = "等待", "unknown"
+            node_status, state_role = _cluster_node_status(supplied, known=known)
             state_color = colors["cluster_warning"] if state_role == "waiting" else colors[state_role]
-            state_x = row_right - 5 - draw.textlength(node_status, font=node_state_font)
-            name_text = short(draw, node_name, name_font, max(28, state_x - row_left - 16))
-            state_text = short(draw, node_status, node_state_font, max(18, row_right - state_x))
-            name_y = node_y - 2
-            name_box = draw.textbbox((row_left, name_y), str(name_text), font=name_font)
-            state_box = draw.textbbox((state_x, node_y + 2), str(state_text), font=node_state_font)
-            row_header_bottom = max(name_box[3], state_box[3]) - node_y
             hide_gpu = known and bool(supplied) and _cluster_gpu_absent(supplied)
-            for label_slot, _, _, allocated_key, total_key, memory in resource_rows:
-                if label_slot == "gpu_label" and hide_gpu:
-                    continue
-                if known and supplied:
-                    resource_values.append(_cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
-                                                         memory=memory))
-                else:
-                    resource_values.append("等待数据")
+            if known and supplied:
+                cpu_value = _cluster_pair(supplied.get("cpu_allocated"), supplied.get("cpu_total"))
+                gpu_value = _cluster_pair(supplied.get("gpu_allocated"), supplied.get("gpu_total"))
+                memory_value = _cluster_pair(supplied.get("memory_allocated_mb"),
+                                             supplied.get("memory_total_mb"), memory=True)
+            else:
+                cpu_value = gpu_value = memory_value = "等待数据"
             node_rows.append({
-                "node_id": node_id, "node_y": node_y, "node_height": node_height,
-                "supplied": supplied, "name_text": name_text, "name_y": name_y,
-                "state_x": state_x, "state_text": state_text, "state_color": state_color,
-                "hide_gpu": hide_gpu, "header_bottom": row_header_bottom,
+                "node_id": node_id, "supplied": supplied, "name": node_name,
+                "state": node_status, "state_color": state_color, "hide_gpu": hide_gpu,
+                "cpu_value": cpu_value, "gpu_value": gpu_value, "memory_value": memory_value,
             })
 
-        resource_font, resource_step, resource_start = _cluster_resource_typography(
-            draw, [row["node_height"] for row in node_rows], scale,
-            content_width=row_right - row_left, values=resource_values,
-            header_bottom=max(row["header_bottom"] for row in node_rows))
+        inline_gap = 8
+        cpu_label_width = math.ceil(draw.textlength("CPU", font=regular_font))
+        gpu_label_width = math.ceil(draw.textlength("GPU", font=regular_font))
+        cpu_value_width = max(math.ceil(draw.textlength(row["cpu_value"], font=regular_font))
+                              for row in node_rows)
+        gpu_value_width = max(math.ceil(draw.textlength(row["gpu_value"], font=regular_font))
+                              for row in node_rows)
+        cpu_need = cpu_label_width + inline_gap + cpu_value_width
+        gpu_need = gpu_label_width + inline_gap + gpu_value_width
+        if cpu_need + gpu_need + inline_gap <= content_width:
+            cpu_column_width = cpu_need
+            cpu_value_limit, gpu_value_limit = cpu_value_width, gpu_value_width
+        else:
+            value_space = max(40, content_width - cpu_label_width - gpu_label_width - 3 * inline_gap)
+            value_total = max(1, cpu_value_width + gpu_value_width)
+            cpu_value_limit = max(20, round(value_space * cpu_value_width / value_total))
+            cpu_value_limit = min(cpu_value_limit, value_space - 20)
+            gpu_value_limit = value_space - cpu_value_limit
+            cpu_column_width = cpu_label_width + inline_gap + cpu_value_limit
+        gpu_column_left = row_left + cpu_column_width + inline_gap
+        memory_label_width = math.ceil(draw.textlength("内存", font=regular_font))
+        memory_value_limit = max(1, content_width - memory_label_width - inline_gap)
 
-        for row in node_rows:
-            node_id, node_y = row["node_id"], row["node_y"]
-            node_height, supplied = row["node_height"], row["supplied"]
-            with draw.group(node_id, (x + 8, node_y, x + width - 8, node_y + node_height)):
-                _shape(draw, "rounded_rectangle", (x + 8, node_y, x + width - 8, node_y + node_height),
+        for index, row in enumerate(node_rows):
+            node_id = row["node_id"]
+            first_line = 1 + 3 * index
+            name_y, resource_y, memory_y = (line_y(first_line), line_y(first_line + 1),
+                                            line_y(first_line + 2))
+            node_height = 3 * pitch
+            with draw.group(node_id, (x + 8, name_y, x + width - 8, name_y + node_height)):
+                _shape(draw, "rounded_rectangle", (x + 8, name_y, x + width - 8, name_y + node_height),
                        "panel", radius=5, fill=colors["surface_alt"])
-                _text(draw, (row_left, row["name_y"]), row["name_text"], "name",
-                      fill=colors["text"], font=name_font)
-                _shape(draw, "ellipse", (row["state_x"] - 12, node_y + 7,
-                                          row["state_x"] - 6, node_y + 13),
+                state_width = draw.textlength(row["state"], font=regular_font)
+                dot_gap, dot_size = 6, 12
+                state_x = row_right - state_width
+                dot_x = state_x - dot_gap - dot_size
+                name_limit = max(0, dot_x - row_left - inline_gap)
+                name_text = short(draw, row["name"], bold_font, name_limit)
+                _text(draw, (row_left, name_y), name_text, "name",
+                      fill=colors["text"], font=bold_font, anchor="lt")
+                _shape(draw, "ellipse", (dot_x, name_y + 4, dot_x + dot_size, name_y + 4 + dot_size),
                        "state_dot", fill=row["state_color"])
-                _text(draw, (row["state_x"], node_y + 2), row["state_text"], "state",
-                      fill=row["state_color"], font=node_state_font)
-                for row_index, (label_slot, value_slot, label, allocated_key, total_key, memory) in enumerate(resource_rows):
-                    visible = not (label_slot == "gpu_label" and row["hide_gpu"])
-                    text_y = node_y + resource_start + row_index * resource_step
-                    _text(draw, (row_left, text_y), label, label_slot,
-                          fill=colors["muted"], font=resource_font, visible=visible)
-                    if known and supplied:
-                        metric_value = _cluster_pair(supplied.get(allocated_key), supplied.get(total_key),
-                                                     memory=memory)
-                    else:
-                        metric_value = "等待数据"
-                    value_width = draw.textlength(metric_value, font=resource_font)
-                    _text(draw, (row_right - value_width, text_y), metric_value, value_slot,
-                          fill=colors["text"], font=resource_font, visible=visible)
+                _text(draw, (state_x, name_y), row["state"], "state",
+                      fill=row["state_color"], font=regular_font, anchor="lt")
 
-        update_font = font(14, scale=scale)
+                cpu_value_text = short(draw, row["cpu_value"], regular_font, cpu_value_limit)
+                cpu_draw_width = ink_width(str(cpu_value_text))
+                _text(draw, (row_left, resource_y), "CPU", "cpu_label", fill=colors["muted"],
+                      font=regular_font, anchor="lt")
+                _text(draw, (row_left + cpu_column_width - cpu_draw_width, resource_y),
+                      cpu_value_text, "cpu_value", fill=colors["text"], font=regular_font, anchor="lt")
+
+                gpu_value_text = short(draw, row["gpu_value"], regular_font, gpu_value_limit)
+                gpu_draw_width = ink_width(str(gpu_value_text))
+                gpu_visible = not row["hide_gpu"]
+                _text(draw, (gpu_column_left, resource_y), "GPU", "gpu_label", fill=colors["muted"],
+                      font=regular_font, anchor="lt", visible=gpu_visible)
+                _text(draw, (row_right - gpu_draw_width, resource_y), gpu_value_text, "gpu_value",
+                      fill=colors["text"], font=regular_font, anchor="lt", visible=gpu_visible)
+
+                memory_value_text = short(draw, row["memory_value"], regular_font, memory_value_limit)
+                memory_draw_width = ink_width(str(memory_value_text))
+                _text(draw, (row_left, memory_y), "内存", "memory_label", fill=colors["muted"],
+                      font=regular_font, anchor="lt")
+                _text(draw, (row_right - memory_draw_width, memory_y), memory_value_text,
+                      "memory_value", fill=colors["text"], font=regular_font, anchor="lt")
+
         updated_label = _cluster_update_label(data.get("updated_at"))
-        _text(draw, (left, y + height - 20), updated_label, "updated_at",
-              fill=colors["muted"], font=update_font)
+        _text(draw, (left, line_y(13)), updated_label, "updated_at",
+              fill=colors["muted"], font=regular_font, anchor="lt")
 
 
 @lru_cache(maxsize=4)
@@ -1186,18 +1181,24 @@ def _render(snapshot: dict, now: datetime | None, profile: dict | None,
     _draw_page_header(draw, snapshot, now, design)
     margin, gap, account_width = geometry["margin"], geometry["gap"], geometry["account_width"]
     top, bottom = geometry["top"], geometry["bottom"]
+    cluster_mode = snapshot.get("right_panel_mode") == "cluster"
+    cluster_width = max(300, account_width) if cluster_mode else account_width
     agent_width = design["agent_width"]
+    if cluster_mode:
+        agent_width = (SIZE[0] - 2 * margin - cluster_width - 3 * gap) // 3
     card_height = bottom - top
     agents = snapshot.get("agents", [])
     for index, agent in enumerate(agents[:3]):
         x = margin + index * (agent_width + gap)
         draw_agent(draw, agent, x, agent_width, design, animation_time, image=image,
                    y=top, height=card_height, now=now)
-    account_x = SIZE[0] - margin - account_width
-    if snapshot.get("right_panel_mode") == "cluster":
+    account_x = SIZE[0] - margin - cluster_width
+    if cluster_mode:
         cluster = snapshot.get("cluster") if isinstance(snapshot.get("cluster"), dict) else {}
-        draw_cluster_panel(draw, cluster, account_x, top, width=account_width,
-                           height=card_height, profile=design)
+        cluster_top = min(top, 76)
+        cluster_bottom = max(bottom, 436)
+        draw_cluster_panel(draw, cluster, account_x, cluster_top, width=cluster_width,
+                           height=cluster_bottom - cluster_top, profile=design)
         page_stale = False
     else:
         account_gap = max(12, gap)
