@@ -86,6 +86,8 @@ dist\KV-Agent-Desk.exe --preview-only
 
 状态更新目标间隔约 2 秒，来源自身的读取耗时会影响实际间隔。Antigravity 任务状态约 2 秒采样、Generator Metadata 约 15 秒采样，额度摘要约 60 秒独立刷新；账户余额和其他供应商额度接口至少间隔 60 秒请求一次。详情见 [隐私与本地数据说明](docs/PRIVACY.md)。
 
+新版 Antigravity App 若不再提供旧版语言服务认证，仪表盘通过 Windows 默认位置的官方 Antigravity CLI（1.1.11 或以上）读取 Gemini 额度和重置时间。CLI 沿用已有登录。桌面任务和累计 Token 仍以最后可信快照显示，并标注待更新。[Antigravity CLI 发布说明](https://antigravity.google/docs/changelog?tab=cli)
+
 ## 设置与本地数据
 
 控制页可调整方向、屏幕画面亮度、USB 输出、自启、ChatGPT 5 小时窗口显示策略和套餐资料。默认自动启动仅登记到当前 Windows 用户的 `Run` 项；应用不会创建系统服务或管理员级开机任务。桌面关闭按钮只会隐藏窗口到托盘，托盘“退出”才会停止应用并释放屏幕接口。

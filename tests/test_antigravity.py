@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -87,6 +88,29 @@ def quota_summary_payload():
             ]
         }
     }
+
+
+def agy_usage_payload(*, name="usage", status="SUCCESS", num_turns=0, conversation_id=""):
+    return {
+        "status": status,
+        "num_turns": num_turns,
+        "conversation_id": conversation_id,
+        "command": {
+            "name": name,
+            "data": quota_summary_payload()["response"],
+        },
+        "synthetic_unselected_field": "must not be copied",
+    }
+
+
+def cli_quota_snapshot():
+    result = AntigravityAdapter._parse_quota_summary({"command": agy_usage_payload()["command"]})
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    result["source"] = "Antigravity official CLI /usage"
+    result["updated_at"] = None
+    result["subscription"]["updated_at"] = timestamp
+    result["subscription"]["source"] = result["source"]
+    return result
 
 
 def activity_payload(rows):
@@ -229,7 +253,6 @@ class AntigravityAdapterTests(unittest.TestCase):
         result = AntigravityAdapter._parse_quota_summary(no_period)
         self.assertFalse(result["subscription"]["five_hour"]["known"])
         self.assertFalse(result["subscription"]["weekly"]["known"])
-
         self.assertIsNone(AntigravityAdapter._bucket_window({"window": "15h", "bucketId": "gemini-5h"}))
         self.assertIsNone(AntigravityAdapter._bucket_window({"window": "25hour", "bucketId": "gemini-5h"}))
         self.assertIsNone(AntigravityAdapter._bucket_window({"window": "session", "bucketId": "gemini-5h"}))
@@ -242,6 +265,38 @@ class AntigravityAdapterTests(unittest.TestCase):
         result = AntigravityAdapter._parse_quota_summary(duplicate)
         self.assertFalse(result["subscription"]["five_hour"]["known"])
         self.assertFalse(result["subscription"]["weekly"]["known"])
+
+    def test_official_cli_version_gate_requires_v111(self):
+        for output, expected in (
+            ("agy v1.1.10", False),
+            ("agy v1.1.11", True),
+            ("agy version 1.1.22", True),
+            ("agy v2.0.0", True),
+            ("agy v1.1.11-rc.1", False),
+            ("unknown version", False),
+        ):
+            with self.subTest(output=output):
+                self.assertEqual(AntigravityAdapter._agy_version_supported(output), expected)
+
+    def test_official_cli_usage_requires_success_zero_turns_and_usage_identity(self):
+        command = AntigravityAdapter._agy_usage_payload(json.dumps(agy_usage_payload()))
+        quota = AntigravityAdapter._parse_quota_summary({"command": command})
+        self.assertTrue(quota["subscription"]["five_hour"]["known"])
+        self.assertTrue(quota["subscription"]["weekly"]["known"])
+        self.assertEqual(quota["subscription"]["five_hour"]["reset_at"], RESET)
+        self.assertEqual(quota["subscription"]["weekly"]["reset_at"], "2035-02-14T10:00:00Z")
+        self.assertNotIn("synthetic_unselected_field", json.dumps(quota))
+
+        invalid_payloads = (
+            agy_usage_payload(status="ERROR"),
+            agy_usage_payload(num_turns=1),
+            agy_usage_payload(conversation_id="synthetic-conversation"),
+            agy_usage_payload(name="models"),
+        )
+        for payload in invalid_payloads:
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    AntigravityAdapter._agy_usage_payload(json.dumps(payload))
 
     def test_local_rpc_uses_only_loopback_and_process_token_header(self):
         response = MagicMock()
@@ -323,6 +378,194 @@ class AntigravityAdapterTests(unittest.TestCase):
         self.assertEqual(result["active_tasks"], 1)
         self.assertTrue(result["subscription"]["five_hour"]["known"])
         self.assertTrue(result["subscription"]["weekly"]["known"])
+
+    def test_ordinary_rpc_failure_does_not_enable_official_cli_fallback(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            adapter = AntigravityAdapter(root)
+            servers = [{"csrf": "", "ports": [61234]}]
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": servers}),
+                patch.object(adapter, "_fetch_quota_summary", side_effect=RuntimeError("synthetic RPC failure")),
+                patch.object(adapter, "_fetch_user_status", side_effect=RuntimeError("synthetic RPC failure")),
+                patch.object(adapter, "_fetch_activity", side_effect=RuntimeError("synthetic RPC failure")),
+                patch.object(adapter, "_start_usage_refresh"),
+                patch.object(adapter, "_start_agy_quota_refresh") as cli_refresh,
+                patch("agent_dashboard.adapters.antigravity.time.monotonic", return_value=100.0),
+            ):
+                result = adapter.collect()
+
+        cli_refresh.assert_not_called()
+        self.assertTrue(result["stale"])
+
+    def test_official_cli_runner_uses_fixed_usage_command_and_allowlisted_environment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cli = root / "agy" / "bin" / "agy.exe"
+            cli.parent.mkdir(parents=True)
+            cli.write_bytes(b"synthetic executable placeholder")
+            responses = [
+                MagicMock(returncode=0, stdout="agy v1.1.22"),
+                MagicMock(returncode=0, stdout=json.dumps(agy_usage_payload())),
+            ]
+            with patch.dict("os.environ", {
+                    "LOCALAPPDATA": str(root), "TEMP": str(root),
+                    "GEMINI_API_KEY": "synthetic-secret", "GOOGLE_API_KEY": "synthetic-secret",
+                    "GOOGLE_APPLICATION_CREDENTIALS": "synthetic-path",
+                    "ANTHROPIC_API_KEY": "synthetic-secret", "PATH": "C:\\Windows\\System32",
+            }, clear=True):
+                adapter = AntigravityAdapter("unused")
+                with patch("agent_dashboard.adapters.antigravity.subprocess.run", side_effect=responses) as run:
+                    quota = adapter._read_agy_quota()
+
+        self.assertEqual(run.call_count, 2)
+        version_call, usage_call = run.call_args_list
+        self.assertEqual(version_call.args[0], [str(cli), "--version"])
+        self.assertEqual(usage_call.args[0], [
+            str(cli), "-p", "/usage", "--output-format", "json", "--print-timeout", "12s",
+        ])
+        for call, expected_timeout in ((version_call, 5.0), (usage_call, 18.0)):
+            kwargs = call.kwargs
+            self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+            self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["cwd"], str(root.resolve()))
+            self.assertEqual(kwargs["timeout"], expected_timeout)
+            self.assertNotIn("shell", kwargs)
+            self.assertNotIn("GEMINI_API_KEY", kwargs["env"])
+            self.assertNotIn("GOOGLE_API_KEY", kwargs["env"])
+            self.assertNotIn("GOOGLE_APPLICATION_CREDENTIALS", kwargs["env"])
+            self.assertNotIn("ANTHROPIC_API_KEY", kwargs["env"])
+        self.assertEqual(quota["source"], "Antigravity official CLI /usage")
+        self.assertTrue(quota["subscription"]["five_hour"]["known"])
+        self.assertTrue(quota["subscription"]["weekly"]["known"])
+
+    def test_unsupported_official_cli_version_never_runs_usage_prompt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cli = root / "agy" / "bin" / "agy.exe"
+            cli.parent.mkdir(parents=True)
+            cli.write_bytes(b"synthetic executable placeholder")
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(root), "TEMP": str(root)}, clear=True):
+                adapter = AntigravityAdapter("unused")
+                with patch("agent_dashboard.adapters.antigravity.subprocess.run",
+                           return_value=MagicMock(returncode=0, stdout="agy v1.1.10")) as run:
+                    with self.assertRaisesRegex(RuntimeError, "版本不支持"):
+                        adapter._read_agy_quota()
+
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], [str(cli), "--version"])
+
+    def test_cli_rejects_success_without_any_known_quota_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cli = root / "agy" / "bin" / "agy.exe"
+            cli.parent.mkdir(parents=True)
+            cli.write_bytes(b"synthetic executable placeholder")
+            payload = agy_usage_payload()
+            for bucket in payload["command"]["data"]["groups"][0]["buckets"]:
+                bucket["disabled"] = True
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(root), "TEMP": str(root)}, clear=True):
+                adapter = AntigravityAdapter("unused")
+                with patch.object(adapter, "_run_agy", side_effect=["agy v1.1.22", json.dumps(payload)]):
+                    with self.assertRaisesRegex(RuntimeError, "未返回可验证"):
+                        adapter._read_agy_quota()
+
+    def test_cli_fallback_requires_bridge_mode_owned_listener_and_no_legacy_auth(self):
+        bridge = {"csrf": "", "ports": [61234], "bridge_token_from_stdin": True}
+        self.assertTrue(AntigravityAdapter._should_use_agy_cli([bridge]))
+        self.assertFalse(AntigravityAdapter._should_use_agy_cli([{"csrf": "", "ports": [61234]}]))
+        self.assertFalse(AntigravityAdapter._should_use_agy_cli([{
+            "csrf": "", "ports": [], "bridge_token_from_stdin": True,
+        }]))
+        self.assertFalse(AntigravityAdapter._should_use_agy_cli([
+            bridge, {"csrf": "legacy-auth", "ports": [61235]},
+        ]))
+
+    def test_cli_quota_refresh_is_background_keeps_task_data_unknown_and_merges_fresh_quota(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            bridge_server = {"csrf": "", "ports": [61234], "bridge_token_from_stdin": True}
+            adapter = AntigravityAdapter(root)
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": [bridge_server]}) as discover,
+                patch.object(adapter, "_read_agy_quota", return_value=cli_quota_snapshot()) as cli_read,
+                patch.object(adapter, "_fetch_quota_summary") as summary,
+                patch.object(adapter, "_fetch_user_status") as legacy,
+                patch.object(adapter, "_fetch_activity") as activity,
+                patch.object(adapter, "_start_usage_refresh") as usage,
+                patch("agent_dashboard.adapters.antigravity.time.monotonic", side_effect=[100.0, 103.0]),
+            ):
+                first = adapter.collect()
+                adapter._cli_quota_thread.join(timeout=1)
+                fresh = adapter.collect()
+
+        discover.assert_called_once_with()
+        cli_read.assert_called_once_with()
+        summary.assert_not_called()
+        legacy.assert_not_called()
+        activity.assert_not_called()
+        usage.assert_not_called()
+        self.assertTrue(first["stale"])
+        self.assertIsNone(first["updated_at"])
+        self.assertEqual(fresh["state"], "unknown")
+        self.assertIsNone(fresh["active_tasks"])
+        self.assertFalse(fresh["tokens"]["known"])
+        self.assertTrue(fresh["stale"])
+        self.assertIsNone(fresh["updated_at"])
+        self.assertTrue(fresh["subscription"]["five_hour"]["known"])
+        self.assertTrue(fresh["subscription"]["weekly"]["known"])
+        self.assertIsNotNone(fresh["subscription"]["updated_at"])
+        self.assertEqual(fresh["subscription"]["source"], "Antigravity official CLI /usage")
+
+        now = datetime.fromisoformat(fresh["subscription"]["updated_at"].replace("Z", "+00:00"))
+        store = LastGoodStore()
+        previous_time = now - timedelta(hours=1)
+        previous = {
+            "provider": "antigravity", "name": "Antigravity", "available": True,
+            "state": "working", "state_label": "工作中", "observed_state": "working",
+            "updated_at": previous_time.isoformat(), "active_tasks": 2, "active_tasks_known": True,
+            "tokens": {"known": False}, "subscription": {"five_hour": {"known": False}, "weekly": {"known": False}},
+        }
+        store.merge(previous, previous_time)
+        merged = store.merge(fresh, now)
+        self.assertEqual(merged["updated_at"], previous_time.isoformat())
+        self.assertEqual(merged["active_tasks"], 2)
+        self.assertEqual(merged["subscription"]["updated_at"], fresh["subscription"]["updated_at"])
+        self.assertEqual(merged["subscription"]["source"], "Antigravity official CLI /usage")
+        self.assertTrue(merged["stale"])
+
+    def test_failed_cli_quota_refresh_retains_last_good_and_hides_raw_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "Antigravity.exe").write_bytes(b"installed")
+            bridge_server = {"csrf": "", "ports": [61234], "bridge_token_from_stdin": True}
+            adapter = AntigravityAdapter(root)
+            with (
+                patch.object(adapter, "_discover_runtime", return_value={"app_running": True, "servers": [bridge_server]}),
+                patch.object(adapter, "_read_agy_quota", side_effect=[
+                    cli_quota_snapshot(), RuntimeError("synthetic confidential data"),
+                ]),
+                patch("agent_dashboard.adapters.antigravity.time.monotonic",
+                      side_effect=[100.0, 103.0, 161.0, 164.0]),
+            ):
+                adapter.collect()
+                adapter._cli_quota_thread.join(timeout=1)
+                good = adapter.collect()
+                adapter.collect()
+                adapter._cli_quota_thread.join(timeout=1)
+                failed = adapter.collect()
+
+        self.assertTrue(good["subscription"]["five_hour"]["known"])
+        self.assertTrue(good["subscription"]["weekly"]["known"])
+        self.assertEqual(failed["subscription"]["five_hour"], good["subscription"]["five_hour"])
+        self.assertEqual(failed["subscription"]["weekly"], good["subscription"]["weekly"])
+        self.assertEqual(failed["subscription"]["updated_at"], good["subscription"]["updated_at"])
+        self.assertEqual(failed["subscription"]["source"], "Antigravity official CLI /usage")
+        self.assertTrue(failed["stale"])
+        self.assertNotIn("synthetic confidential data", failed["detail"])
 
     def test_activity_refresh_after_two_seconds_does_not_refresh_quota(self):
         with tempfile.TemporaryDirectory() as temp:

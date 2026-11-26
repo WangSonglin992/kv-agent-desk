@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.4
+
+- Restore Antigravity's Gemini quota refresh through the official read-only CLI when the running desktop client no longer exposes the legacy local authentication flag. Track quota freshness separately from retained desktop activity and Token usage.
+
 ## 0.10.3
 
 - Reflow the cluster panel into evenly spaced rows with fixed 20px text, bold node headings, CPU/GPU columns and a separate memory row.

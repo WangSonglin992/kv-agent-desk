@@ -20,7 +20,7 @@ DeepSeek 余额接口的官方说明见 [DeepSeek Get User Balance](https://api-
 - Codex 数据从本地文件读取，不联网。
 - ZCode 额度查询只针对代码中允许的 Z.ai / BigModel 官方 HTTPS 主机；仅在本机当前选择 Coding Plan provider 时尝试。请求至少间隔 60 秒，并拒绝重定向。
 - DeepSeek 余额请求只到官方 HTTPS API，至少间隔 60 秒；每次请求都是只读 GET。
-- Antigravity 的任务状态、`includeMessages=false` Generator Metadata 与额度请求发往正在运行的本机 language server，分别约每 2 秒、15 秒和 60 秒读取。本地 usage 只读取 input/output/cache 数值；显示总数为输入加输出，缓存计数单独呈现、不重复相加。客户端可能依照其自身行为与 Google 服务通信；本应用不会为 Antigravity 登录账号或发送模型推理请求。
+- Antigravity 的任务状态、`includeMessages=false` Generator Metadata 与额度请求发往正在运行的本机 language server，分别约每 2 秒、15 秒和 60 秒读取。本地 usage 只读取 input/output/cache 数值，显示总数为输入加输出，缓存计数单列。当运行中的桌面版不再提供旧版认证方式时，每约 60 秒用已安装的官方 Antigravity CLI 1.1.11 或更新版本查询 Gemini 额度。此时由官方 CLI 使用已有登录连接 Google，只保存额度窗口和成功时间。桌面任务和累计 Token 继续显示最近可信记录及待更新提示。仪表盘不读取 CLI 凭据或保存原始输出，也不发起模型推理。
 - 本机控制页通过回环接口提供服务，不向局域网监听，也不会将状态同步到云端。
 - 已安装版本默认后台读取本仓库的 GitHub 稳定 Release 公共更新清单；清单不存在时才查询 GitHub 公开 API。下载仅允许 GitHub 及指定官方资产域名，文件通过 SHA-256 校验后才安装。请求不使用 GitHub 登录或 API Key，不上传设置、订阅或布局；正常自动检查间隔为 24 小时，失败时退避。
 

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Any
@@ -39,6 +40,26 @@ _REQUEST_BODY = json.dumps(
 _SUMMARY_REQUEST_BODY = b'{"forceRefresh":true}'
 _ACTIVITY_REQUEST_BODY = b'{"excludeSubtrajectories":true}'
 _RUN_STATUSES = {1: "IDLE", 2: "RUNNING", 3: "CANCELING", 4: "BUSY"}
+_AGY_MINIMUM_VERSION = (1, 1, 11)
+_AGY_PRINT_TIMEOUT = "12s"
+_AGY_PROCESS_TIMEOUT_SECONDS = 18.0
+_AGY_VERSION_TIMEOUT_SECONDS = 5.0
+_AGY_MAX_OUTPUT_BYTES = 256 * 1024
+_AGY_QUOTA_SOURCE = "Antigravity official CLI /usage"
+_AGY_ALLOWED_ENV = {
+    "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "PATH", "USERPROFILE",
+    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "TEMP", "TMP", "HOMEDRIVE",
+    "HOMEPATH", "USERNAME", "USERDOMAIN", "HTTP_PROXY", "HTTPS_PROXY",
+    "NO_PROXY", "ALL_PROXY",
+}
+
+
+class _AgyCliError(RuntimeError):
+    """A safe, user-facing category for an official CLI failure."""
+
+    def __init__(self, detail: str):
+        super().__init__(detail)
+        self.detail = detail
 
 _DISCOVERY_SCRIPT = r'''
 $root = [IO.Path]::GetFullPath($env:AGENT_ANTIGRAVITY_ROOT)
@@ -50,10 +71,11 @@ $servers = @()
 foreach ($item in @($items | Where-Object { $_.Name -eq 'language_server.exe' -and $_.ExecutablePath -eq $serverExe })) {
     $match = [regex]::Match($item.CommandLine, '--csrf_token(?:=|\s+)(?:"([^"]+)"|(\S+))')
     $csrf = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    $bridgeTokenFromStdin = [bool]($item.CommandLine -match '(?:^|\s)--read_host_bridge_token_from_stdin(?:\s|$)')
     $ports = @(Get-NetTCPConnection -State Listen -OwningProcess $item.ProcessId -ErrorAction SilentlyContinue |
         Where-Object { $_.LocalAddress -eq '127.0.0.1' } |
         Select-Object -ExpandProperty LocalPort -Unique)
-    $servers += [ordered]@{ csrf = $csrf; ports = $ports }
+    $servers += [ordered]@{ csrf = $csrf; bridge_token_from_stdin = $bridgeTokenFromStdin; ports = $ports }
 }
 [ordered]@{ app_running = $appRunning; servers = @($servers) } | ConvertTo-Json -Compress -Depth 5
 '''
@@ -68,8 +90,9 @@ class AntigravityAdapter:
     """
 
     def __init__(self, root: Path | str | None = None):
-        local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-        self.root = Path(root).expanduser() if root is not None else local_app_data / "Programs" / "antigravity"
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        self.local_app_data = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        self.root = Path(root).expanduser() if root is not None else self.local_app_data / "Programs" / "antigravity"
         self._lock = threading.Lock()
         self._last_attempt: float | None = None
         self._last_quota_attempt: float | None = None
@@ -79,6 +102,9 @@ class AntigravityAdapter:
         self._last_usage_attempt: float | None = None
         self._usage_result: dict[str, Any] | None = None
         self._usage_thread: threading.Thread | None = None
+        self._last_cli_quota_attempt: float | None = None
+        self._cli_quota_thread: threading.Thread | None = None
+        self._cli_quota_result: dict[str, Any] | None = None
         self._last_result: dict[str, Any] | None = None
 
     def collect(self) -> dict[str, Any]:
@@ -113,6 +139,23 @@ class AntigravityAdapter:
                         result = self._offline_snapshot()
                     else:
                         servers = runtime.get("servers", [])
+                        cli_quota_mode = self._should_use_agy_cli(servers)
+                        if cli_quota_mode:
+                            self._start_agy_quota_refresh(now)
+                            if self._cli_quota_result is None:
+                                self._cli_quota_result = self._agy_pending_snapshot()
+                            result = deepcopy(self._cli_quota_result)
+                            result.update(
+                                state="unknown", observed_state="unknown", state_label="数据待更新",
+                                active_tasks=None, active_tasks_known=False, updated_at=None, stale=True,
+                                tokens={"known": False, "total": None, "scope": "cumulative"},
+                            )
+                            quota_detail = result.get("detail", "")
+                            desktop_detail = self._cli_desktop_data_detail()
+                            result["detail"] = f"{quota_detail} {desktop_detail}".strip()
+                            self._last_result = result
+                            return deepcopy(result)
+
                         if (self._quota_result is None or self._last_quota_attempt is None
                                 or now - self._last_quota_attempt >= _MIN_REFRESH_SECONDS):
                             self._last_quota_attempt = now
@@ -137,7 +180,6 @@ class AntigravityAdapter:
                             result.update(state="unknown", observed_state="unknown", state_label="数据待更新",
                                           active_tasks=None, active_tasks_known=False, stale=True)
                             result["updated_at"] = (self._last_result or {}).get("updated_at")
-                            self._runtime = None
                         if "GetAllCascadeTrajectories" not in result["source"]:
                             result["source"] += "; GetAllCascadeTrajectories localhost RPC"
                         self._start_usage_refresh(servers, now)
@@ -154,6 +196,185 @@ class AntigravityAdapter:
 
             self._last_result = result
             return deepcopy(result)
+
+    @staticmethod
+    def _valid_ports(server: object) -> bool:
+        if not isinstance(server, dict) or not isinstance(server.get("ports"), list):
+            return False
+        return any(type(port) is int and 1 <= port <= 65535 for port in server["ports"])
+
+    @classmethod
+    def _should_use_agy_cli(cls, servers: object) -> bool:
+        if not isinstance(servers, list):
+            return False
+        usable_legacy_auth = any(
+            isinstance(server, dict)
+            and isinstance(server.get("csrf"), str)
+            and bool(server["csrf"].strip())
+            and cls._valid_ports(server)
+            for server in servers
+        )
+        bridge_mode = any(
+            isinstance(server, dict)
+            and server.get("bridge_token_from_stdin") is True
+            and cls._valid_ports(server)
+            for server in servers
+        )
+        return bridge_mode and not usable_legacy_auth
+
+    def _start_agy_quota_refresh(self, now: float) -> None:
+        if self._cli_quota_thread is not None and self._cli_quota_thread.is_alive():
+            return
+        if (self._last_cli_quota_attempt is not None
+                and now - self._last_cli_quota_attempt < _MIN_REFRESH_SECONDS):
+            return
+        self._last_cli_quota_attempt = now
+        if self._cli_quota_result is None:
+            self._cli_quota_result = self._agy_pending_snapshot()
+        else:
+            self._cli_quota_result["stale"] = True
+            self._cli_quota_result["detail"] = "官方 Antigravity CLI 额度刷新中；暂保留最近额度。"
+
+        def refresh() -> None:
+            try:
+                quota = self._read_agy_quota()
+                with self._lock:
+                    self._cli_quota_result = quota
+            except _AgyCliError as error:
+                self._record_agy_quota_failure(error.detail)
+            except Exception:
+                self._record_agy_quota_failure("官方 Antigravity CLI 额度读取失败；保留最近可信额度。")
+
+        self._cli_quota_thread = threading.Thread(
+            target=refresh, daemon=True, name="antigravity-cli-quota")
+        self._cli_quota_thread.start()
+
+    def _record_agy_quota_failure(self, detail: str) -> None:
+        with self._lock:
+            if self._cli_quota_result is None:
+                self._cli_quota_result = self._agy_pending_snapshot(detail)
+            else:
+                self._cli_quota_result["stale"] = True
+                self._cli_quota_result["detail"] = detail
+
+    @staticmethod
+    def _agy_pending_snapshot(detail: str = "官方 Antigravity CLI /usage 额度等待刷新；暂无可信额度。") -> dict[str, Any]:
+        result = AntigravityAdapter._snapshot(
+            available=True,
+            state="unknown",
+            observed_state="unknown",
+            state_label="数据待更新",
+            stale=True,
+            detail=detail,
+            source=_AGY_QUOTA_SOURCE,
+        )
+        result["subscription"]["source"] = _AGY_QUOTA_SOURCE
+        return result
+
+    def _cli_desktop_data_detail(self) -> str:
+        return "当前桌面认证模式下任务状态和 Token 待更新。"
+
+    @staticmethod
+    def _agy_version_supported(output: str) -> bool:
+        match = re.search(r"(?<!\d)v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?", output)
+        if not match:
+            return False
+        version = tuple(int(part) for part in match.groups()[:3])
+        if version < _AGY_MINIMUM_VERSION:
+            return False
+        if version == _AGY_MINIMUM_VERSION and match.group(4):
+            return False
+        return True
+
+    @staticmethod
+    def _agy_usage_payload(output: str) -> dict[str, Any]:
+        if len(output.encode("utf-8")) > _AGY_MAX_OUTPUT_BYTES:
+            raise ValueError("CLI output exceeds limit")
+        payload = json.loads(output)
+        if not isinstance(payload, dict):
+            raise ValueError("invalid CLI result")
+        if payload.get("status") != "SUCCESS" or type(payload.get("num_turns")) is not int or payload["num_turns"] != 0:
+            raise ValueError("CLI did not complete zero-turn usage command")
+        if payload.get("conversation_id") not in (None, ""):
+            raise ValueError("CLI opened a conversation")
+        command = payload.get("command")
+        if not isinstance(command, dict) or command.get("name") not in {"usage", "/usage"}:
+            raise ValueError("CLI command identity is not usage")
+        if not isinstance(command.get("data"), dict):
+            raise ValueError("CLI usage data missing")
+        return command
+
+    @property
+    def _agy_executable(self) -> Path:
+        return self.local_app_data / "agy" / "bin" / "agy.exe"
+
+    @staticmethod
+    def _agy_environment() -> dict[str, str]:
+        return {key: value for key, value in os.environ.items() if key.upper() in _AGY_ALLOWED_ENV}
+
+    @staticmethod
+    def _agy_safe_cwd() -> Path:
+        candidate = Path(os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir())
+        try:
+            resolved = candidate.expanduser().resolve(strict=True)
+            if resolved.is_dir():
+                return resolved
+        except (OSError, RuntimeError):
+            pass
+        return Path(tempfile.gettempdir()).resolve()
+
+    def _run_agy(self, arguments: list[str], timeout: float) -> str:
+        try:
+            completed = subprocess.run(
+                [str(self._agy_executable), *arguments],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+                cwd=str(self._agy_safe_cwd()),
+                env=self._agy_environment(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            raise _AgyCliError("官方 Antigravity CLI 超时或不可用；保留最近可信额度。") from None
+        output = completed.stdout or ""
+        if len(output.encode("utf-8")) > _AGY_MAX_OUTPUT_BYTES:
+            raise _AgyCliError("官方 Antigravity CLI 输出超出限制；保留最近可信额度。")
+        if completed.returncode != 0:
+            raise _AgyCliError("官方 Antigravity CLI 命令未成功；保留最近可信额度。")
+        return output
+
+    def _read_agy_quota(self) -> dict[str, Any]:
+        if not self._agy_executable.is_file():
+            raise _AgyCliError("未找到标准安装位置的 Antigravity CLI；保留最近可信额度。")
+        version = self._run_agy(["--version"], _AGY_VERSION_TIMEOUT_SECONDS)
+        if not self._agy_version_supported(version):
+            raise _AgyCliError("Antigravity CLI 版本不支持无轮次额度查询；保留最近可信额度。")
+        output = self._run_agy(
+            ["-p", "/usage", "--output-format", "json", "--print-timeout", _AGY_PRINT_TIMEOUT],
+            _AGY_PROCESS_TIMEOUT_SECONDS,
+        )
+        try:
+            command = self._agy_usage_payload(output)
+            quota = self._parse_quota_summary({"command": command})
+            if not any(
+                quota["subscription"][window].get("known")
+                for window in ("five_hour", "weekly")
+            ):
+                raise ValueError("CLI usage contained no known quota window")
+        except Exception:
+            raise _AgyCliError("官方 Antigravity CLI 未返回可验证的 /usage 额度结果；保留最近可信额度。") from None
+        quota["source"] = _AGY_QUOTA_SOURCE
+        quota["updated_at"] = None
+        quota["subscription"]["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        quota["subscription"]["source"] = _AGY_QUOTA_SOURCE
+        quota["subscription"]["detail"] = quota["detail"]
+        quota["detail"] = "官方 Antigravity CLI /usage 已更新 Gemini 共享额度。"
+        return quota
 
     def _start_usage_refresh(self, servers: object, now: float) -> None:
         if self._usage_thread is not None and self._usage_thread.is_alive():
